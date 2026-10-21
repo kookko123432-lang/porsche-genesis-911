@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#090A0C" />
+  <title>MY PORSCHE : GENESIS 911 // STUTTGART-ZUFFENHAUSEN</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="porsche-ui.css" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --car-hex: #D5001C;
+      --brass-hex: #C5A059;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+    html, body {
+      background-color: #090A0C;
+      color: #F4F3EF;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", "PingFang TC", sans-serif;
+      margin: 0;
+      padding: 0;
+      overflow-x: hidden;
+    }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    .porsche-track { letter-spacing: 0.16em; }
+    .porsche-track-wide { letter-spacing: 0.24em; }
+    .brushed-metal {
+      background: linear-gradient(135deg, #1B1D22 0%, #0E1014 50%, #191B20 100%);
+    }
+    .gold-card-surface {
+      background: radial-gradient(circle at 85% 15%, rgba(197, 160, 89, 0.18), transparent 58%),
+                  linear-gradient(160deg, #16171C 0%, #0B0C0E 100%);
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* 3D 對價契約黑卡翻轉 */
+    .flip-perspective { perspective: 1200px; }
+    .flip-inner {
+      position: relative;
+      width: 100%;
+      min-height: 196px;
+      transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+      transform-style: preserve-3d;
+    }
+    .flip-inner.is-flipped { transform: rotateY(180deg); }
+    .flip-face {
+      position: absolute;
+      inset: 0;
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+    }
+    .flip-back { transform: rotateY(180deg); }
+
+    /* 冷車啟動微震動 */
+    @keyframes boxerVibration {
+      0% { transform: translate(0, 0); }
+      25% { transform: translate(-1.2px, 1px); }
+      50% { transform: translate(1.2px, -1px); }
+      75% { transform: translate(-1px, -0.8px); }
+      100% { transform: translate(0, 0); }
+    }
+    .igniting-vibration { animation: boxerVibration 0.07s infinite; }
+
+    /* 左側點火旋鈕轉動 */
+    .ignition-rotary {
+      transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.25s ease, box-shadow 0.25s ease;
+    }
+    .ignition-rotary:active,
+    .ignition-rotary.turning {
+      transform: rotate(-28deg) scale(0.96);
+      box-shadow: 0 0 28px rgba(213, 0, 28, 0.65);
+    }
+
+    /* 桌機 iPhone 16 Pro 機身容器 vs 手機全螢幕自適應 */
+    .app-shell {
+      width: 100%;
+      max-width: 430px;
+      min-height: 100dvh;
+      margin: 0 auto;
+      background: #090A0C;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+    }
+    @media (min-width: 640px) {
+      body.device-frame-mode {
+        padding: 20px 16px 32px;
+        background: radial-gradient(circle at 50% 0%, #16181F 0%, #07080A 70%);
+      }
+      body.device-frame-mode .app-shell {
+        width: 390px;
+        min-height: 812px;
+        max-height: 850px;
+        border-radius: 50px;
+        border: 7px solid #23252B;
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.85), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+    }
+  </style>
+</head>
+<body class="device-frame-mode select-none">
+
+  <!-- 桌機頂部控制列 (手機全螢幕時自動隱藏) -->
+  <div class="hidden sm:flex max-w-5xl mx-auto mb-4 px-4 py-2.5 bg-[#111318] border border-white/10 rounded-xl items-center justify-between text-xs">
+    <div class="flex items-center gap-3">
+      <span class="font-mono px-2 py-0.5 bg-[#D5001C] text-white font-semibold tracking-widest">STYLE PORSCHE</span>
+      <span class="font-mono text-[#8E929B] tracking-wider">MY PORSCHE : GENESIS 911 // COMMISSIONING SYSTEM</span>
+    </div>
+    <div class="flex items-center gap-2 font-mono">
+      <button id="btn-open-standby" class="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 border border-white/15 text-[#F4F3EF] transition">
+        STANDBY 夜間紅光五環模式
+      </button>
+      <button id="btn-open-strobe" class="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 border border-[#C5A059]/50 text-[#C5A059] transition">
+        60S VISUAL PRIMING
+      </button>
+      <button id="btn-open-spec-modal" class="px-3 py-1.5 rounded bg-[#F4F3EF] text-[#090A0C] font-semibold transition">
+        CONFIGURE SPEC
+      </button>
+    </div>
+  </div>
+
+  <!-- ======================================================================
+       iPhone 16 Pro 主應用座艙容器 (App Shell)
+       ====================================================================== -->
+  <div class="app-shell" id="main-app-shell">
+
+    <!-- 頂部 Dynamic Island 與原廠車型狀態列 -->
+    <header class="pt-2.5 px-5 pb-2.5 border-b border-white/10 bg-[#090A0C]/95 backdrop-blur-md z-30">
+      <div class="w-24 h-5 bg-black rounded-full mx-auto mb-2.5 border border-white/5 flex items-center justify-between px-2.5">
+        <span id="island-status-dot" class="w-1.5 h-1.5 rounded-full bg-[#D5001C]"></span>
+        <span id="island-code-text" class="text-[11px] font-mono text-[#8E929B] tabular-nums">911</span>
+      </div>
+
+      <div class="flex justify-between items-baseline">
+        <div>
+          <div id="top-model-label" class="font-mono text-xs text-[#8E929B] porsche-track uppercase">
+            PORSCHE 911 CARRERA GTS
+          </div>
+          <div id="top-screen-title" class="text-sm font-semibold tracking-wide text-[#F4F3EF] mt-0.5">
+            COMMISSIONING CHRONO
+          </div>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <button id="btn-mobile-spec" class="font-mono text-xs px-2 py-0.5 border border-white/20 text-[#F4F3EF] hover:border-white/50 transition">
+            DAY <span id="top-day-num" class="tabular-nums">001</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- 中央可滾動主視窗 (5 Screens) -->
+    <main class="flex-1 overflow-y-auto no-scrollbar px-5 py-3.5 space-y-3.5">
+
+      <!-- ==================================================================
+           SCREEN 00: iOS WIDGETS & STANDBY (桌面小工具與夜間待機預覽)
+           ================================================================== -->
+      <section id="screen-s0" class="screen-pane hidden space-y-3.5">
+        <!-- 鎖定畫面頂部單行小工具預覽 -->
+        <div class="text-center pb-2 border-b border-white/10">
+          <div class="text-[11px] font-mono text-[#8E929B] uppercase tracking-widest mb-0.5">IOS LOCK SCREEN INLINE WIDGET</div>
+          <div id="widget-lock-inline" class="text-xs font-mono tracking-widest text-[#F4F3EF] tabular-nums">
+            911 GTS  ·  T-910D  ·  2029.04.18
+          </div>
+        </div>
+
+        <!-- 上排：2x2 Sport Chrono 小工具 + 2x2 資本配額小工具 -->
+        <div class="grid grid-cols-2 gap-3">
+          <!-- Small Widget 1: Sport Chrono 機械碼錶 -->
+          <div id="widget-chrono-tap" class="bg-[#111318] border border-white/15 rounded-2xl p-3.5 aspect-square flex flex-col justify-between relative shadow-lg cursor-pointer hover:border-[#D5001C] transition" title="點擊觸發左側點火脈衝">
+            <div class="flex justify-between items-center">
+              <span class="font-mono text-xs tracking-wider text-[#8E929B]">CHRONO</span>
+              <span class="w-1.5 h-1.5 rounded-full bg-[#D5001C]"></span>
+            </div>
+            <div class="my-auto flex items-center justify-center relative">
+              <svg class="w-20 h-20" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="44" fill="none" stroke="#252830" stroke-width="2" stroke-dasharray="2 4" />
+                <circle cx="50" cy="50" r="38" fill="none" stroke="#1E2028" stroke-width="4" />
+                <circle id="widget-chrono-arc" cx="50" cy="50" r="38" fill="none" stroke="#D5001C" stroke-width="4" stroke-dasharray="12 240" transform="rotate(-90 50 50)" />
+                <line id="widget-chrono-hand" x1="50" y1="50" x2="50" y2="15" stroke="#D5001C" stroke-width="2" />
+                <circle cx="50" cy="50" r="3.5" fill="#F4F3EF" />
+              </svg>
+              <div class="absolute inset-0 flex flex-col items-center justify-center pt-6">
+                <span id="widget-chrono-day" class="font-mono text-xs font-bold text-[#F4F3EF] tabular-nums">001</span>
+              </div>
+            </div>
+            <div class="flex justify-between items-baseline border-t border-white/10 pt-1.5">
+              <span class="font-mono text-xs text-[#8E929B]">DAY</span>
+              <span id="widget-chrono-ratio" class="font-mono text-xs text-[#F4F3EF] tabular-nums">001/911</span>
+            </div>
+          </div>
+
+          <!-- Small Widget 2: Capital Allocation 桌面配額小工具 -->
+          <div class="bg-[#111318] border border-white/15 rounded-2xl p-3.5 aspect-square flex flex-col justify-between shadow-lg">
+            <div class="flex justify-between items-center">
+              <span class="font-mono text-xs tracking-wider text-[#8E929B]">ALLOCATION</span>
+              <span id="widget-alloc-pct" class="font-mono text-xs text-[#C5A059] tabular-nums">0.0%</span>
+            </div>
+            <div>
+              <div class="font-mono text-xs text-[#8E929B]">DELIVERY</div>
+              <div class="font-mono text-base font-bold text-[#F4F3EF] tabular-nums tracking-tight mt-0.5">2029.04.18</div>
+              <div class="w-full h-1 bg-[#1E2129] mt-2 overflow-hidden">
+                <div id="widget-alloc-bar" class="h-full bg-[#F4F3EF] transition-all duration-300" style="width: 2%;"></div>
+              </div>
+            </div>
+            <div class="flex justify-between items-center border-t border-white/10 pt-1.5">
+              <span class="font-mono text-xs text-[#8E929B]">IGNITION</span>
+              <span id="widget-ignition-state" class="font-mono text-xs text-[#D5001C] font-semibold">STANDBY</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 中排：4x2 祖文豪森準車主排程卡 (支援早中晚自動/手動切換視角防視覺麻痺) -->
+        <div class="bg-[#111318] border border-white/15 rounded-2xl p-3.5 shadow-lg">
+          <div class="flex justify-between items-center border-b border-white/10 pb-2 mb-2.5">
+            <span class="font-mono text-xs tracking-widest text-[#8E929B] uppercase">ZUFFENHAUSEN // COMM. 992</span>
+            <button id="btn-cycle-widget-tod" class="font-mono text-xs text-[#C5A059] hover:underline">
+              <span id="widget-tod-label">DUSK VIEW · 18:00</span> ↻
+            </button>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <!-- 動態保時捷 911 視角剪影框 -->
+            <div class="w-28 h-16 bg-[#07080A] border border-white/10 rounded-lg flex flex-col items-center justify-center p-2 relative overflow-hidden">
+              <svg id="widget-car-svg" class="w-full h-9" viewBox="0 0 160 55">
+                <path d="M18 42 C30 40, 46 16, 82 16 C114 16, 132 32, 146 36 L148 44 L14 44 Z" fill="#15171D" stroke="#686D78" stroke-width="1.5"/>
+                <line id="widget-car-accent-line" x1="98" y1="33" x2="145" y2="35" stroke="#D5001C" stroke-width="2.5" />
+                <circle cx="42" cy="43" r="8" fill="#0B0C0E" stroke="#8E929B" stroke-width="1.5"/>
+                <circle cx="122" cy="43" r="8.5" fill="#0B0C0E" stroke="#8E929B" stroke-width="1.5"/>
+              </svg>
+              <span id="widget-car-code" class="font-mono text-xs text-[#8E929B] tracking-widest">911 GTS</span>
+            </div>
+
+            <!-- 右側倒數與今日潛意識刻印 -->
+            <div class="flex-1">
+              <div class="flex items-baseline justify-between">
+                <span id="widget-tminus-days" class="font-mono text-lg font-bold text-[#F4F3EF] tabular-nums">T-910 DAYS</span>
+                <span class="font-mono text-xs text-[#8E929B]">WED</span>
+              </div>
+              <p id="widget-daily-affirm" class="text-xs text-[#C8C6C0] leading-snug mt-1 border-l-2 border-[#D5001C] pl-2 cursor-pointer" title="點擊切換下一句暗示">
+                「我不出售廉價時間，我只打造配得上 911 的高槓桿系統。」
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 下排：iOS StandBy 橫向床頭待機夜間紅光五環模式 -->
+        <div id="card-standby-launch" class="bg-[#060709] border border-[#D5001C]/45 rounded-2xl p-3.5 shadow-lg cursor-pointer hover:border-[#D5001C] transition">
+          <div class="flex justify-between items-center mb-1.5">
+            <span class="font-mono text-xs text-[#D5001C] tracking-widest">NIGHT STANDBY MODE // SATS 6HZ</span>
+            <span class="font-mono text-xs text-[#F4F3EF] underline">ENTER FULLSCREEN ➔</span>
+          </div>
+          <div class="flex items-center justify-center gap-2 py-2">
+            <div class="w-10 h-10 rounded-full border border-[#D5001C]/50 flex items-center justify-center font-mono text-xs text-[#D5001C] tabular-nums">2029</div>
+            <div id="standby-mini-days" class="w-12 h-12 rounded-full border border-[#D5001C]/75 flex items-center justify-center font-mono text-xs text-[#F4F3EF] tabular-nums">910D</div>
+            <div class="w-14 h-14 rounded-full border-2 border-[#D5001C] bg-[#D5001C]/10 flex flex-col items-center justify-center">
+              <span class="font-mono text-xs font-bold text-[#F4F3EF]">911</span>
+              <span class="font-mono text-xs text-[#D5001C]">RPM</span>
+            </div>
+            <div class="w-12 h-12 rounded-full border border-[#D5001C]/75 flex items-center justify-center font-mono text-xs text-[#F4F3EF] tabular-nums">04.18</div>
+            <div class="w-10 h-10 rounded-full border border-[#D5001C]/50 flex items-center justify-center font-mono text-xs text-[#D5001C]">6HZ</div>
+          </div>
+        </div>
+
+        <!-- 匯出鎖定畫面桌布按鈕 -->
+        <button id="btn-export-wallpaper" class="w-full py-2.5 px-4 bg-[#14161C] hover:bg-[#1B1E26] border border-white/15 rounded-xl font-mono text-xs text-[#F4F3EF] tracking-wider transition">
+          EXPORT 2029.04.18 LOCK SCREEN WALLPAPER (PNG)
+        </button>
+      </section>
+
+      <!-- ==================================================================
+           SCREEN 01: 01 // CHRONO (911 天精密時計 & 原廠對價契約)
+           ================================================================== -->
+      <section id="screen-s1" class="screen-pane space-y-3.5">
+        <!-- 1. 中央精密機械錶盤 + 左側點火實體旋鈕 -->
+        <div class="bg-[#111318] border border-white/10 rounded-xl p-4 flex items-center justify-between">
+          <div>
+            <div class="font-mono text-xs text-[#8E929B] uppercase">TARGET DELIVERY DATE</div>
+            <div class="font-mono text-2xl font-bold text-[#F4F3EF] tabular-nums tracking-tight mt-0.5">
+              2029.04.18 <span class="text-xs font-normal text-[#8E929B]">WED</span>
+            </div>
+            <div id="chrono-live-ticker" class="font-mono text-xs text-[#D5001C] tabular-nums mt-1 font-semibold">
+              T-910D · 00:00:00.0
+            </div>
+            <div id="chrono-halfway-text" class="font-mono text-xs text-[#8E929B] mt-2">
+              HALFWAY: 2028.01.19 (D-456)
+            </div>
+          </div>
+
+          <!-- 保時捷經典左側點火旋鈕 (Left-Hand Ignition Rotary) -->
+          <div class="flex flex-col items-center">
+            <button id="btn-left-ignition" class="w-16 h-16 rounded-full brushed-metal border-2 border-[#D5001C] flex items-center justify-center shadow-inner relative cursor-pointer ignition-rotary" title="點擊啟動水平對臥六缸冷車點火">
+              <div class="w-2.5 h-9 bg-[#E8E6E1] rounded-sm shadow"></div>
+            </button>
+            <span id="ignition-label-text" class="font-mono text-xs text-[#8E929B] mt-1.5 tracking-wider">LEFT IGNITION</span>
+          </div>
+        </div>
+
+        <!-- 2. 原廠 10 階段生產節點與購車資本遙測 (Capital & Build Telemetry) -->
+        <div class="bg-[#111318] border border-white/10 rounded-xl p-4 space-y-2.5">
+          <div class="flex justify-between items-baseline">
+            <span class="font-mono text-xs text-[#8E929B] uppercase">CAPITAL & BUILD TELEMETRY</span>
+            <span id="build-stage-counter" class="font-mono text-xs text-[#F4F3EF] tabular-nums">STAGE 01 / 10</span>
+          </div>
+
+          <!-- 10 格精密刻度條 (點擊任一格可檢視該生產階段詳情) -->
+          <div id="build-segments-bar" class="grid grid-cols-10 gap-1"></div>
+
+          <!-- 當前生產節點說明 -->
+          <div class="bg-[#0B0C0F] border border-white/10 rounded-lg p-2.5">
+            <div class="flex justify-between font-mono text-xs">
+              <span id="stage-code-text" class="text-[#C5A059]">ALLOC-01 // DAY 001</span>
+              <span id="stage-status-tag" class="text-[#F4F3EF]">UNLOCKED</span>
+            </div>
+            <div id="stage-title-text" class="text-xs font-semibold text-[#F4F3EF] mt-0.5">
+              斯圖加特生產配額確認
+            </div>
+            <div id="stage-spec-text" class="text-xs text-[#8E929B] mt-0.5">
+              911 天委託計畫正式立案，車身同色智慧鑰匙建檔。
+            </div>
+          </div>
+
+          <!-- 購車基金進度與快速入帳 -->
+          <div class="pt-1">
+            <div class="flex justify-between text-xs font-mono mb-1">
+              <span class="text-[#8E929B]">ALLOCATION FUND (<span id="fund-pct-inline">0.0%</span>)</span>
+              <span id="fund-numbers-inline" class="text-[#F4F3EF] tabular-nums">NT$ 0 / 7,800,000</span>
+            </div>
+            <div class="w-full h-1 bg-white/10 overflow-hidden mb-2.5">
+              <div id="chrono-fund-bar" class="h-full bg-[#D5001C] transition-all duration-300" style="width: 0%;"></div>
+            </div>
+            <div class="flex gap-1.5 font-mono text-xs">
+              <input id="input-fund-delta" type="number" placeholder="輸入新增購車資本 (NT$)" class="flex-1 bg-[#090A0C] border border-white/15 rounded px-2.5 py-1.5 text-xs text-[#F4F3EF] focus:outline-none focus:border-[#C5A059]" />
+              <button id="btn-deposit-fund" class="px-3 py-1.5 bg-[#F4F3EF] text-[#090A0C] font-semibold rounded hover:bg-white transition">
+                + ALLOCATE
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. 金凱瑞 × 李小龍《準車主對價交換黑卡》(支援 180° 翻轉與編輯) -->
+        <div class="flip-perspective">
+          <div id="covenant-flip-card" class="flip-inner">
+            <!-- 正面：斯圖加特交車憑證與價值宣言 -->
+            <div class="flip-face gold-card-surface border border-[#C5A059]/55 rounded-xl p-4 flex flex-col justify-between">
+              <div>
+                <div class="flex justify-between items-center border-b border-white/10 pb-2 mb-2">
+                  <span class="font-mono text-xs text-[#C5A059] tracking-widest">STUTTGART CUSTODIAN COVENANT</span>
+                  <button id="btn-flip-to-back" class="font-mono text-xs text-[#8E929B] hover:text-white underline">
+                    EDIT / FLIP 180°
+                  </button>
+                </div>
+                <div class="grid grid-cols-2 gap-2 font-mono text-xs mb-2">
+                  <div>
+                    <span class="text-[#8E929B] block">MODEL SPEC</span>
+                    <span id="card-model-spec" class="text-[#F4F3EF] font-semibold">911 GTS · GUARDS RED</span>
+                  </div>
+                  <div>
+                    <span class="text-[#8E929B] block">SETTLEMENT</span>
+                    <span class="text-[#C5A059] font-semibold tabular-nums">2029.04.18</span>
+                  </div>
+                </div>
+              </div>
+              <div class="border-t border-white/10 pt-2">
+                <div class="flex justify-between items-center font-mono text-xs text-[#8E929B] mb-0.5">
+                  <span>VALUE IN RETURN (李小龍對價承諾)</span>
+                  <button id="btn-speak-covenant" class="text-[#C5A059] hover:underline">AUDIO ▸</button>
+                </div>
+                <p id="covenant-text-display" class="text-xs text-[#E8E6E1] leading-relaxed italic line-clamp-2">
+                  「在這 911 天內，我將全面戒除低價值消耗，專注建構可規模化的高毛利商業資產，以頂尖產出兌換這把鑰匙。」
+                </p>
+              </div>
+            </div>
+
+            <!-- 背面：編輯李小龍對價契約與準車主姓名 -->
+            <div class="flip-face flip-back bg-[#12141A] border border-[#D5001C]/60 rounded-xl p-4 flex flex-col justify-between">
+              <div class="flex justify-between items-center border-b border-white/10 pb-1.5">
+                <span class="font-mono text-xs text-[#D5001C] tracking-widest">UPDATE COVENANT TERMS</span>
+                <button id="btn-flip-to-front" class="font-mono text-xs text-[#8E929B] hover:text-white underline">
+                  BACK 180°
+                </button>
+              </div>
+              <textarea id="textarea-covenant" rows="3" class="w-full bg-[#090A0C] border border-white/15 rounded p-2 text-xs text-[#F4F3EF] focus:outline-none focus:border-[#D5001C]" placeholder="寫下你在這 911 天內承諾為世界創造的對價價值..."></textarea>
+              <button id="btn-save-covenant" class="w-full py-1.5 bg-[#D5001C] text-white font-mono text-xs font-semibold rounded">
+                SEAL COVENANT SIGNATURE
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. 911 天時光校準滑桿 (Time-Travel Calibration) -->
+        <div class="bg-[#111318] border border-white/10 rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-3 font-mono text-xs">
+          <span class="text-[#8E929B] whitespace-nowrap">TIMELINE SIM</span>
+          <input id="slider-day-sim" type="range" min="1" max="911" value="1" class="w-full accent-[#D5001C]" />
+          <button id="btn-reset-day" class="text-[#C5A059] whitespace-nowrap hover:underline">TODAY</button>
+        </div>
+      </section>
+
+      <!-- ==================================================================
+           SCREEN 02: 02 // COCKPIT (360° 實景座艙 & 第一人稱夜駕伴讀聲場)
+           ================================================================== -->
+      <section id="screen-s2" class="screen-pane hidden space-y-3.5">
+        <!-- 實景級第一人稱夜駕與 360° 座艙透視視窗 -->
+        <div id="cockpit-viewport-box" class="relative h-64 rounded-xl overflow-hidden border border-white/15 bg-[#050608] flex flex-col justify-between p-3.5 cursor-grab active:cursor-grabbing">
+          <canvas id="cockpit-pov-canvas" class="absolute inset-0 w-full h-full block"></canvas>
+
+          <!-- 頂部 HUD 遙測數據疊層 -->
+          <div class="relative z-10 flex justify-between items-center font-mono text-xs bg-black/65 backdrop-blur-md px-3 py-1.5 rounded border border-white/10">
+            <span id="hud-gear-speed" class="text-[#F4F3EF] font-bold tabular-nums">M5 · 128 KM/H</span>
+            <span id="hud-rpm-readout" class="text-[#D5001C] tabular-nums">3,800 RPM</span>
+            <button id="btn-hud-downshift" class="text-[#C5A059] hover:underline" title="點擊執行退檔補油聲浪">
+              REV-MATCH ▾
+            </button>
+          </div>
+
+          <!-- 底部 PCM 車載潛意識肯定句同步顯示 -->
+          <div class="relative z-10 bg-black/75 backdrop-blur-md border border-white/15 rounded-lg p-2.5">
+            <div class="flex justify-between items-center font-mono text-xs text-[#8E929B] mb-0.5">
+              <span>PCM 6.0 // IN-CAR SUBLIMINAL RADIO</span>
+              <button id="btn-speak-pcm-affirm" class="text-[#D5001C] font-semibold hover:underline">SPEAK ▸</button>
+            </div>
+            <div id="pcm-affirm-text" class="text-xs text-[#F4F3EF] font-medium">
+              「我做的每一個商業決策都沉穩而精準，財富正全速向我匯聚。」
+            </div>
+          </div>
+        </div>
+
+        <!-- 視角與路線切換控制 -->
+        <div class="grid grid-cols-3 gap-1.5 font-mono text-xs">
+          <button data-pov="night" class="pov-mode-btn bg-[#F4F3EF] text-[#090A0C] font-semibold py-2 rounded text-center transition">
+            POV NIGHT DRIVE
+          </button>
+          <button data-pov="cabin360" class="pov-mode-btn bg-[#14161B] text-[#8E929B] border border-white/10 py-2 rounded text-center transition">
+            360° CABIN PAN
+          </button>
+          <button data-pov="coast" class="pov-mode-btn bg-[#14161B] text-[#8E929B] border border-white/10 py-2 rounded text-center transition">
+            COASTAL DAWN
+          </button>
+        </div>
+
+        <!-- 四軌座艙環境聲學推桿 (Acoustic Soundscape Mixer) -->
+        <div class="bg-[#111318] border border-white/10 rounded-xl p-4 space-y-3">
+          <div class="flex justify-between items-center font-mono text-xs">
+            <span class="text-[#8E929B] uppercase">ACOUSTIC SOUNDSCAPE MIXER</span>
+            <button id="btn-toggle-soundscape" class="px-2.5 py-1 rounded bg-[#D5001C] text-white font-semibold transition">
+              START ENGINE AUDIO
+            </button>
+          </div>
+
+          <div class="space-y-2.5 font-mono text-xs">
+            <div>
+              <div class="flex justify-between text-[#8E929B] mb-1">
+                <span>01 FLAT-SIX BOXER RESONANCE</span>
+                <span id="lbl-vol-boxer" class="text-[#F4F3EF] tabular-nums">65%</span>
+              </div>
+              <input id="rng-vol-boxer" type="range" min="0" max="1" step="0.05" value="0.65" class="w-full accent-[#D5001C]" />
+            </div>
+            <div>
+              <div class="flex justify-between text-[#8E929B] mb-1">
+                <span>02 WINDSHIELD RAIN & HIGHWAY</span>
+                <span id="lbl-vol-rain" class="text-[#F4F3EF] tabular-nums">40%</span>
+              </div>
+              <input id="rng-vol-rain" type="range" min="0" max="1" step="0.05" value="0.40" class="w-full accent-[#F4F3EF]" />
+            </div>
+            <div>
+              <div class="flex justify-between text-[#8E929B] mb-1">
+                <span>03 THETA 6HZ + SELF-VOICE SUBLIMINAL</span>
+                <span id="lbl-vol-bin" class="text-[#C5A059] tabular-nums">25%</span>
+              </div>
+              <input id="rng-vol-bin" type="range" min="0" max="1" step="0.05" value="0.25" class="w-full accent-[#C5A059]" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================================================================
+           SCREEN 03: 03 // 2029 LIFE (2029 車主一日有聲誌 & 富人內外世界)
+           ================================================================== -->
+      <section id="screen-s3" class="screen-pane hidden space-y-3.5">
+        <!-- 1. 《A DAY IN 2029》24H 時序沉浸有聲誌 -->
+        <div class="bg-[#111318] border border-white/10 rounded-xl p-4 space-y-3">
+          <div class="flex justify-between items-center font-mono text-xs text-[#8E929B]">
+            <span>24H TIMELINE MEDITATION</span>
+            <span id="ch-freq-badge" class="text-[#D5001C] font-semibold">10Hz ALPHA · 07:15 AM</span>
+          </div>
+
+          <!-- 5 個時段切換鈕 -->
+          <div id="chapter-tabs-bar" class="grid grid-cols-5 gap-1 font-mono text-[11px] text-center"></div>
+
+          <div>
+            <div id="ch-code-label" class="font-mono text-xs text-[#C5A059]">CH.01 // COLD START</div>
+            <h3 id="ch-title-label" class="text-sm font-semibold text-[#F4F3EF] mt-0.5">
+              地下私人車庫的冷車啟動與晨間主權
+            </h3>
+          </div>
+
+          <!-- 第一人稱雜誌敘事文稿提詞視窗 -->
+          <div id="ch-lines-container" class="max-h-40 overflow-y-auto space-y-2 pr-1 text-xs leading-relaxed border-l border-white/20 pl-3"></div>
+
+          <!-- 語音＋Theta 腦波播放控制列 -->
+          <div class="flex items-center justify-between border-t border-white/10 pt-2.5 font-mono text-xs">
+            <button id="btn-play-chapter" class="px-3 py-1.5 bg-[#D5001C] text-white font-semibold rounded transition">
+              ▸ PLAY VOICE + 6HZ THETA
+            </button>
+            <button id="btn-stop-chapter" class="px-2.5 py-1.5 bg-white/5 border border-white/15 text-[#8E929B] hover:text-white rounded">
+              STOP
+            </button>
+          </div>
+        </div>
+
+        <!-- 2. 成功人士「外在世界 vs 內在心理世界」全息對照卡 -->
+        <div class="bg-[#111318] border border-[#C5A059]/45 rounded-xl p-4 space-y-2.5">
+          <div class="flex justify-between items-center border-b border-white/10 pb-2">
+            <span id="psyche-code-text" class="font-mono text-xs text-[#C5A059] uppercase">01 // CAPITAL & LEVERAGE</span>
+            <div class="flex items-center gap-2 font-mono text-xs">
+              <span id="psyche-index-text" class="text-[#8E929B]">1 OF 4</span>
+              <button id="btn-next-psyche" class="px-2 py-0.5 border border-white/20 text-[#F4F3EF] hover:border-white/50 rounded">
+                NEXT ▸
+              </button>
+            </div>
+          </div>
+
+          <h4 id="psyche-title-text" class="text-xs font-semibold text-[#F4F3EF]">
+            財富結構：從「出售工時」到「建構資產槓桿」
+          </h4>
+
+          <div>
+            <div class="font-mono text-xs text-[#8E929B] uppercase">OUTER WORLD（外在生活秩序與資產結構）</div>
+            <p id="psyche-outer-text" class="text-xs text-[#E8E6E1] mt-0.5 leading-relaxed"></p>
+          </div>
+
+          <div class="border-t border-white/10 pt-2">
+            <div class="font-mono text-xs text-[#D5001C] uppercase">INNER WORLD（內在心理與決策作業系統）</div>
+            <p id="psyche-inner-text" class="text-xs text-[#E8E6E1] mt-0.5 leading-relaxed"></p>
+          </div>
+
+          <div class="bg-[#090A0C] border border-white/10 rounded-lg p-2.5 space-y-1">
+            <div id="psyche-old-text" class="text-xs text-[#8E929B] line-through"></div>
+            <div id="psyche-new-text" class="text-xs text-[#C5A059] font-medium"></div>
+          </div>
+        </div>
+
+        <!-- 3. 車主眼界與決策校準模擬 (Executive Telemetry Scenario) -->
+        <div class="bg-[#111318] border border-white/10 rounded-xl p-4 space-y-2.5">
+          <div class="flex justify-between items-center font-mono text-xs">
+            <span id="sc-code-label" class="text-[#8E929B]">SCENARIO 01 // CAPITAL ALLOCATION</span>
+            <button id="btn-next-scenario" class="text-[#C5A059] hover:underline">SWITCH SCENARIO ↻</button>
+          </div>
+          <p id="sc-prompt-text" class="text-xs text-[#F4F3EF] leading-relaxed font-medium"></p>
+          <div id="sc-choices-box" class="space-y-1.5"></div>
+          <div id="sc-analysis-box" class="hidden bg-[#090A0C] border-l-2 border-[#C5A059] p-2.5 text-xs text-[#E8E6E1] leading-relaxed"></div>
+        </div>
+      </section>
+
+      <!-- ==================================================================
+           SCREEN 04: 04 // LOGBOOK (親口錄音潛意識植入、金屬簽名板與車主手札)
+           ================================================================== -->
+      <section id="screen-s4" class="screen-pane hidden space-y-3.5">
+        <!-- 1. 親口語音肯定句錄製與 Subliminal 混音 -->
+        <div class="bg-[#111318] border border-white/10 rounded-xl p-4 space-y-2.5">
+          <div class="flex justify-between items-center font-mono text-xs">
+            <span class="text-[#8E929B]">SELF-VOICE AFFIRMATION LOOP</span>
+            <span id="rec-state-badge" class="text-[#D5001C]">● READY</span>
+          </div>
+
+          <p id="log-affirm-display" class="text-xs text-[#F4F3EF] font-medium leading-relaxed border-l-2 border-[#C5A059] pl-2.5 py-0.5 cursor-pointer" title="點擊切換肯定句">
+            「我完全配得上 2029 年 4 月 18 日的保時捷 911，我的商業判斷力與資產每天都在複利躍升。」
+          </p>
+
+          <div class="grid grid-cols-3 gap-1.5 font-mono text-xs">
+            <button id="btn-rec-voice" class="bg-[#D5001C] text-white py-2 rounded font-semibold transition">
+              REC OWN VOICE
+            </button>
+            <button id="btn-loop-voice" disabled class="bg-white/5 border border-white/15 text-[#8E929B] py-2 rounded transition disabled:opacity-40">
+              LOOP VOICE
+            </button>
+            <button id="btn-launch-strobe-log" class="bg-white/5 border border-[#C5A059]/45 text-[#C5A059] py-2 rounded transition">
+              60S STROBE
+            </button>
+          </div>
+          <audio id="self-voice-audio" class="hidden"></audio>
+        </div>
+
+        <!-- 2. 保時捷金屬迎賓門檻手寫簽名板 (Door Sill Tactile Signature Plate) -->
+        <div class="brushed-metal border border-white/15 rounded-xl p-4 space-y-2">
+          <div class="flex justify-between items-center font-mono text-xs">
+            <span class="text-[#8E929B]">369 TACTILE SIGNATURE PLATE</span>
+            <span id="sig-counter-label" class="text-[#C5A059] tabular-nums">00 / 09 COMPLETED</span>
+          </div>
+          <div class="h-24 bg-[#08090B] border border-dashed border-white/20 rounded-lg relative overflow-hidden">
+            <canvas id="signature-pad-canvas" class="w-full h-full block cursor-crosshair touch-none"></canvas>
+          </div>
+          <div class="flex justify-between gap-2 font-mono text-xs pt-0.5">
+            <button id="btn-clear-sig" class="px-3 py-1.5 bg-white/5 border border-white/15 text-[#8E929B] hover:text-white rounded">
+              CLEAR
+            </button>
+            <button id="btn-commit-sig" class="flex-1 py-1.5 bg-[#F4F3EF] text-[#090A0C] font-semibold rounded">
+              IMPRINT TO SUBCONSCIOUS (+1)
+            </button>
+          </div>
+        </div>
+
+        <!-- 3. 2029 車主生活點滴與 WOOP 實證手札 (Custodian Log & Reality Contrast) -->
+        <div class="bg-[#111318] border border-white/10 rounded-xl p-4 space-y-2.5">
+          <div class="flex justify-between items-center font-mono text-xs">
+            <span class="text-[#8E929B]">CUSTODIAN LOG & RAS EVIDENCE</span>
+            <button id="btn-huberman-protocol" class="text-[#D5001C] hover:underline">
+              REALITY CONTRAST (怠惰急救)
+            </button>
+          </div>
+
+          <div class="flex gap-1.5 font-mono text-xs">
+            <select id="log-tag-select" class="bg-[#090A0C] border border-white/15 rounded px-2 py-1.5 text-xs text-[#C5A059]">
+              <option value="FUTURE VLOG">FUTURE VLOG</option>
+              <option value="HIGH-LEVERAGE">HIGH-LEVERAGE</option>
+              <option value="RAS EVIDENCE">RAS EVIDENCE</option>
+              <option value="WOOP PROTOCOL">WOOP PROTOCOL</option>
+            </select>
+            <input id="input-log-entry" type="text" placeholder="記錄今日車主級決策或顯化實證..." class="flex-1 bg-[#090A0C] border border-white/15 rounded px-2.5 py-1.5 text-xs text-[#F4F3EF] focus:outline-none focus:border-[#C5A059]" />
+            <button id="btn-add-log" class="px-3 py-1.5 bg-[#D5001C] text-white font-semibold rounded">
+              LOG
+            </button>
+          </div>
+
+          <div id="custodian-log-list" class="max-h-44 overflow-y-auto space-y-2 pt-1"></div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- 底部極簡五欄瑞士導航列 (00 WIDGETS · 01 CHRONO · 02 COCKPIT · 03 2029 · 04 LOG) -->
+    <nav class="border-t border-white/10 bg-[#0A0B0D] px-2 py-3 grid grid-cols-5 text-center font-mono text-[11px] z-30">
+      <button data-target="s0" class="nav-tab-btn text-[#8E929B] pb-1 transition">00 WIDGET</button>
+      <button data-target="s1" class="nav-tab-btn text-[#F4F3EF] font-bold border-b-2 border-[#D5001C] pb-1 transition">01 CHRONO</button>
+      <button data-target="s2" class="nav-tab-btn text-[#8E929B] pb-1 transition">02 COCKPIT</button>
+      <button data-target="s3" class="nav-tab-btn text-[#8E929B] pb-1 transition">03 2029</button>
+      <button data-target="s4" class="nav-tab-btn text-[#8E929B] pb-1 transition">04 LOG</button>
+    </nav>
+  </div>
+
+  <!-- ======================================================================
+       MODAL A: iOS StandBy 全螢幕橫向夜間紅光五環待機模式
+       ====================================================================== -->
+  <div id="modal-standby" class="fixed inset-0 z-50 bg-black hidden flex-col justify-between p-8">
+    <div class="flex justify-between items-center font-mono text-xs text-[#D5001C] tracking-widest">
+      <span>PORSCHE 992 // NIGHT STANDBY TELEMETRY · 6HZ THETA SATS</span>
+      <button id="btn-close-standby" class="px-3 py-1 border border-[#D5001C]/50 text-[#F4F3EF] rounded">
+        EXIT STANDBY
+      </button>
+    </div>
+
+    <div class="my-auto flex items-center justify-center gap-4 sm:gap-8">
+      <div class="w-20 h-20 sm:w-28 sm:h-28 rounded-full border border-[#D5001C]/50 flex flex-col items-center justify-center font-mono">
+        <span class="text-[11px] text-[#8E929B]">DELIVERY</span>
+        <span class="text-sm sm:text-lg font-bold text-[#D5001C] tabular-nums">2029</span>
+      </div>
+      <div class="w-24 h-24 sm:w-36 sm:h-36 rounded-full border border-[#D5001C]/75 flex flex-col items-center justify-center font-mono">
+        <span class="text-[11px] text-[#8E929B]">REMAINING</span>
+        <span id="standby-full-days" class="text-lg sm:text-2xl font-bold text-[#F4F3EF] tabular-nums">910D</span>
+      </div>
+      <div class="w-32 h-32 sm:w-44 sm:h-44 rounded-full border-2 border-[#D5001C] bg-[#D5001C]/10 flex flex-col items-center justify-center font-mono shadow-[0_0_50px_rgba(213,0,28,0.28)]">
+        <span id="standby-full-daynum" class="text-xs text-[#C5A059]">DAY 001 / 911</span>
+        <span class="text-2xl sm:text-4xl font-bold text-[#F4F3EF] tabular-nums mt-1">04.18</span>
+        <span class="text-xs text-[#D5001C] mt-1">STUTTGART</span>
+      </div>
+      <div class="w-24 h-24 sm:w-36 sm:h-36 rounded-full border border-[#D5001C]/75 flex flex-col items-center justify-center font-mono">
+        <span class="text-[11px] text-[#8E929B]">ALLOCATION</span>
+        <span id="standby-full-pct" class="text-lg sm:text-2xl font-bold text-[#F4F3EF] tabular-nums">0.0%</span>
+      </div>
+      <div class="w-20 h-20 sm:w-28 sm:h-28 rounded-full border border-[#D5001C]/50 flex flex-col items-center justify-center font-mono">
+        <span class="text-[11px] text-[#8E929B]">WAVE</span>
+        <span class="text-sm sm:text-lg font-bold text-[#D5001C]">6HZ</span>
+      </div>
+    </div>
+
+    <div class="text-center font-mono text-xs text-[#8E929B]">
+      「握住方向盤、看見金色盾徽、聞到全新真皮香氣、聽見水平對臥六缸啟動聲浪——2029.04.18 已然實現。」
+    </div>
+  </div>
+
+  <!-- ======================================================================
+       MODAL B: 60 秒極簡視覺潛意識刻印 (60s High-Contrast Visual Priming)
+       ====================================================================== -->
+  <div id="modal-strobe" class="fixed inset-0 z-50 bg-[#050608]/95 backdrop-blur-xl hidden items-center justify-center p-6">
+    <div class="max-w-md w-full border border-white/15 bg-[#0B0C10] rounded-2xl p-6 text-center space-y-6">
+      <div class="flex justify-between items-center font-mono text-xs text-[#8E929B]">
+        <span>SUBLIMINAL VISUAL PRIMING // RAS LOCK</span>
+        <button id="btn-close-strobe" class="text-[#F4F3EF] hover:underline">CLOSE</button>
+      </div>
+      <div class="py-10 border-y border-white/10 space-y-3">
+        <div id="strobe-meta-tag" class="font-mono text-xs text-[#D5001C] tracking-widest">2029.04.18 // COMM. 000911</div>
+        <div id="strobe-main-line" class="text-lg font-semibold text-[#F4F3EF] leading-relaxed px-2">
+          我就是 2029 年 4 月 18 日保時捷 911 的準車主。
+        </div>
+      </div>
+      <div class="flex justify-between items-center font-mono text-xs">
+        <span class="text-[#8E929B]">FOCUS ON CENTER · BREATHE DEEPLY</span>
+        <span id="strobe-countdown" class="text-base font-bold text-[#C5A059] tabular-nums">60s</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================================
+       MODAL C: 斯圖加特車輛選配與個人化設定 (Vehicle & Persona Commissioning)
+       ====================================================================== -->
+  <div id="modal-spec" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden items-center justify-center p-5">
+    <div class="max-w-md w-full bg-[#111318] border border-white/20 rounded-2xl p-5 space-y-4">
+      <div class="flex justify-between items-center border-b border-white/10 pb-3">
+        <span class="font-mono text-xs text-[#C5A059] tracking-widest uppercase">ZUFFENHAUSEN SPEC CONFIGURATOR</span>
+        <button id="btn-close-spec" class="font-mono text-xs text-[#8E929B] hover:text-white">CLOSE</button>
+      </div>
+
+      <div class="space-y-3 font-mono text-xs">
+        <div>
+          <label class="text-[#8E929B] block mb-1">01 / MODEL DERIVATIVE (車型規格)</label>
+          <select id="cfg-model" class="w-full bg-[#090A0C] border border-white/15 rounded p-2 text-[#F4F3EF]"></select>
+        </div>
+        <div>
+          <label class="text-[#8E929B] block mb-1">02 / EXTERIOR PAINT (原廠車漆色號)</label>
+          <select id="cfg-paint" class="w-full bg-[#090A0C] border border-white/15 rounded p-2 text-[#F4F3EF]"></select>
+        </div>
+        <div>
+          <label class="text-[#8E929B] block mb-1">03 / TARGET ALLOCATION CAPITAL (目標總車價 NT$)</label>
+          <input id="cfg-price" type="number" class="w-full bg-[#090A0C] border border-white/15 rounded p-2 text-[#F4F3EF]" />
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-[#8E929B] block mb-1">04 / CITY (居住城市)</label>
+            <input id="cfg-city" type="text" class="w-full bg-[#090A0C] border border-white/15 rounded p-2 text-[#F4F3EF]" />
+          </div>
+          <div>
+            <label class="text-[#8E929B] block mb-1">05 / DOMAIN (事業領域)</label>
+            <input id="cfg-business" type="text" class="w-full bg-[#090A0C] border border-white/15 rounded p-2 text-[#F4F3EF]" />
+          </div>
+        </div>
+      </div>
+
+      <button id="btn-save-spec" class="w-full py-2.5 bg-[#D5001C] text-white font-mono text-xs font-semibold tracking-wider rounded">
+        APPLY COMMISSIONING SPECIFICATION
+      </button>
+    </div>
+  </div>
+
+  <!-- ======================================================================
+       MODAL D: Huberman 心理對比急救協議 (Reality Contrast Protocol)
+       ====================================================================== -->
+  <div id="modal-huberman" class="fixed inset-0 z-50 bg-black/90 backdrop-blur-md hidden items-center justify-center p-5">
+    <div class="max-w-md w-full bg-[#111318] border border-[#D5001C]/60 rounded-2xl p-5 space-y-4">
+      <div class="flex justify-between items-center border-b border-white/10 pb-2.5">
+        <span class="font-mono text-xs text-[#D5001C] tracking-widest">NEURO-TELEMETRY // REALITY CONTRAST</span>
+        <button id="btn-close-huberman" class="font-mono text-xs text-[#8E929B]">CLOSE</button>
+      </div>
+      <p class="text-xs text-[#8E929B] leading-relaxed">
+        史丹佛大學神經科學實證：當行動力低落時，單純幻想美好結果會降低血壓與動力；此時必須進行 30 秒<strong class="text-[#F4F3EF]">「未達成代價預演」</strong>以喚醒交感神經：
+      </p>
+      <div class="bg-[#090A0C] border-l-2 border-[#D5001C] p-3 text-xs text-[#E8E6E1] leading-relaxed">
+        想像時間來到 2029 年 4 月 18 日。因為過去 911 天裡一次次「今天先算了」的妥協，交車日當天你的資產毫無寸進，只能站在街角看著別人駕著你的夢想 911 呼嘯而過。
+      </div>
+      <div class="space-y-2">
+        <div class="font-mono text-xs text-[#C5A059]">IMMEDIATE 15-MINUTE INTERVENTION（立刻執行一個 15 分鐘微行動逆轉時間線）：</div>
+        <div class="flex gap-2 font-mono text-xs">
+          <input id="input-huberman-act" type="text" placeholder="輸入接下來 15 分鐘要完成的高價值動作..." class="flex-1 bg-[#090A0C] border border-white/15 rounded px-2.5 py-1.5 text-[#F4F3EF]" />
+          <button id="btn-commit-huberman" class="px-3 py-1.5 bg-[#D5001C] text-white font-semibold rounded">
+            EXECUTE
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="audio-engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

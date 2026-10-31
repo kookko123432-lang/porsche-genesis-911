@@ -1,5 +1,10 @@
 .DS_Store
+*.apk
+*.jks
+*.keystore
+signing/
 android/.gradle/
 android/build/
 android/app/build/
+android/app/src/main/assets/www/
 local.properties

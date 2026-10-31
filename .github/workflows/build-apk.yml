@@ -2,7 +2,7 @@ name: Build Porsche 911 Android APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -31,12 +31,27 @@ jobs:
           mkdir -p android/app/src/main/assets/www
           cp index.html porsche-ui.css app.js audio-engine.js data.js manifest.json android/app/src/main/assets/www/
 
-      - name: Build Installable Android APK
+      - name: Restore Release Signing Key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::KEYSTORE_BASE64 secret is missing; refusing to publish an APK signed with a throwaway key."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Build Signed Release APK
         working-directory: ./android
-        run: gradle assembleDebug --no-daemon
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon
 
       - name: Prepare APK Package
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk ./porsche-genesis-911.apk
+        run: cp android/app/build/outputs/apk/release/app-release.apk ./porsche-genesis-911.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -47,10 +62,12 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.911
-          name: "MY PORSCHE : GENESIS 911 (Android APK + Home Screen Widget)"
+          tag_name: v2.1.${{ github.run_number }}
+          name: "GENESIS 911 · v2.1.${{ github.run_number }}"
+          make_latest: true
           body: |
-            ### PORSCHE DIGITAL // GENESIS 911 (2026.10.21 – 2029.04.18)
-            - **Android 直接安裝檔**：下載下方 `porsche-genesis-911.apk` 即可直接安裝至 Android 手機。
-            - **內建 Android 原生桌面小工具 (AppWidget)**：安裝後長按手機桌面 ➔「小工具 (Widgets)」➔ 選擇 **PORSCHE 911 // CHRONO WIDGET** 即可釘選在桌面。
+            ### MY PORSCHE : GENESIS 911 (2026.10.21 – 2029.04.18)
+            - 下載下方 `porsche-genesis-911.apk` 直接安裝到 Android 手機。
+            - 桌面小工具：長按主畫面 → 小工具 → **PORSCHE 911 // CHRONO WIDGET**。
+            - 從 v2.1 起使用固定簽章，之後的版本可直接覆蓋安裝並保留資料。
           files: ./porsche-genesis-911.apk

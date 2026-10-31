@@ -312,7 +312,42 @@ class GenesisAudioEngine {
     this.soundscapeActive = false;
   }
 
+  // Android WebView has no reliable Web Speech API, so the APK exposes a native
+  // TextToSpeech bridge (window.AndroidBridge). Browsers fall back to speechSynthesis.
+  hasNativeTts() {
+    return !!(window.AndroidBridge && typeof window.AndroidBridge.speak === "function");
+  }
+
+  canSpeak() {
+    return this.hasNativeTts() || "speechSynthesis" in window;
+  }
+
+  stopSpeaking() {
+    this._nativeOnEnd = null;
+    this._nativeUtteranceId = null;
+    if (this.hasNativeTts() && typeof window.AndroidBridge.stopSpeaking === "function") {
+      window.AndroidBridge.stopSpeaking();
+    }
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  }
+
+  // Called by the native bridge when an utterance finishes or fails
+  _nativeDone(id) {
+    if (id !== this._nativeUtteranceId) return; // stale callback from a flushed utterance
+    const cb = this._nativeOnEnd;
+    this._nativeOnEnd = null;
+    this._nativeUtteranceId = null;
+    if (cb) cb();
+  }
+
   speak(text, opts = {}) {
+    if (this.hasNativeTts()) {
+      const id = "u" + Date.now() + Math.random().toString(36).slice(2, 7);
+      this._nativeUtteranceId = id;
+      this._nativeOnEnd = opts.onEnd || null;
+      window.AndroidBridge.speak(String(text), String(opts.rate || 0.9), id);
+      return;
+    }
     if (!("speechSynthesis" in window)) {
       if (opts.onEnd) opts.onEnd();
       return;

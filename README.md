@@ -2,8 +2,8 @@
 **Stuttgart-Zuffenhausen 911-Day Commissioning & Mental Telemetry System (`2026.10.21` – `2029.04.18`)**
 
 ## 1. Android 手機安裝與桌面小工具啟用指南
-1. 前往本專案的 **[Releases 頁面](../../releases/latest)** 下載 **`porsche-genesis-911.apk`**（或使用專案根目錄已編譯好的 `porsche-genesis-911.apk`）。
-2. 在 Android 手機上點選安裝。
+1. 前往本專案的 **[Releases 頁面](../../releases/latest)** 下載最新的 **`porsche-genesis-911.apk`**。
+2. 在 Android 手機上點選安裝。（從 v2.1 起使用固定簽章，之後的更新可直接覆蓋安裝並保留資料。）
 3. **新增 Android 桌面小工具**：
    - 長按 Android 手機主畫面空白處 ➔ 點選 **「小工具 (Widgets)」**
    - 找到 **「PORSCHE 911 // CHRONO WIDGET」** 並拖曳至桌面，即可隨時檢視 `DAY XXX / 911`、`T-XXX DAYS`（目標日 `2029.04.18`）與車主潛意識暗示。

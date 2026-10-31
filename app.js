@@ -1,1091 +1,1456 @@
 // ============================================================================
-// MY PORSCHE : GENESIS 911 — MAIN CONTROLLER & ATMOSPHERIC RENDERER
-// Stuttgart-Zuffenhausen Industrial Specification
+// MY PORSCHE : GENESIS 911 — Main controller
 // ============================================================================
 
 (function () {
+  "use strict";
+
   const STORAGE_KEY = "PORSCHE_GENESIS_911_STATE_V2";
-  const START_DATE = new Date(2026, 9, 21, 0, 0, 0); // 2026.10.21 (Day 001)
-  const TARGET_DATE = new Date(2029, 3, 18, 23, 59, 59); // 2029.04.18 (Day 911)
+  const TARGET_DATE = new Date(2029, 3, 18, 23, 59, 59); // end of Day 911
   const TOTAL_DAYS = 911;
+  const HALFWAY_DAY = 456;
+  const D = window.GENESIS_DATA;
+  const audio = window.genesisAudio;
+  const $ = (id) => document.getElementById(id);
+
+  const SCREEN_TITLES = {
+    s0: "Widgets & Standby",
+    s1: "Commissioning Chrono",
+    s2: "Cockpit & Night Drive",
+    s3: "A Day in 2029",
+    s4: "Custodian Logbook"
+  };
+  const LOG_TAG_LABELS = {
+    "FUTURE VLOG": "Future vlog",
+    "HIGH-LEVERAGE": "Leverage",
+    "RAS EVIDENCE": "RAS evidence",
+    "WOOP PROTOCOL": "WOOP"
+  };
+  const POV_PRESETS = {
+    night: { gear: "M5", speed: 128, rpm: 3800 },
+    coast: { gear: "M4", speed: 96, rpm: 3400 },
+    cabin360: { gear: "P", speed: 0, rpm: 850 }
+  };
 
   const defaultState = {
     modelId: "carrera_gts",
     paintId: "guards_red",
     targetPrice: 7800000,
     allocatedFund: 1850000,
-    ignitedToday: false,
     lastIgnitionDate: "",
     city: "台北信義區",
     business: "高槓桿事業與資產系統",
     partner: "摯愛的家人與伴侶",
     covenantText:
       "「在這 911 天內，我將全面戒除低價值消耗，專注建構可規模化的高毛利商業資產，以頂尖產出兌換這把鑰匙。」",
-    sigCount: 3,
+    sigCount: 0,
+    sigDate: "",
     logs: [
-      {
-        tag: "FUTURE VLOG",
-        day: "DAY 001",
-        text: "在信義區路口遇見一輛粉筆灰 992 GTS，大腦 RAS 雷達瞬間鎖定目標。"
-      },
-      {
-        tag: "HIGH-LEVERAGE",
-        day: "DAY 001",
-        text: "完成核心產品高單價定價重構，推進購車基金第一哩路。"
-      }
+      { tag: "FUTURE VLOG", day: "DAY 001", text: "在信義區路口遇見一輛粉筆灰 992 GTS，大腦 RAS 雷達瞬間鎖定目標。" },
+      { tag: "HIGH-LEVERAGE", day: "DAY 001", text: "完成核心產品高單價定價重構，推進購車基金第一哩路。" }
     ]
   };
 
   let state = loadState();
+  let activeScreen = "s1";
   let simDayOverride = null;
   let selectedStageIndex = null;
-  let widgetTodIndex = 2; // 0: DAWN, 1: NOON, 2: DUSK
+  let affirmIdx = 0;
+  let todIdx = 0;
   let activeChapterIdx = 0;
   let activeLineIdx = 0;
-  let chapterTimer = null;
+  let playToken = 0;
   let psycheIdx = 0;
   let scenarioIdx = 0;
-  let affirmIdx = 0;
   let strobeTimer = null;
-
-  // Cockpit POV 狀態
-  let povMode = "night"; // 'night' | 'cabin360' | 'coast'
-  let cabinYaw = 0; // -120 ~ +120
-  let roadOffset = 0;
-  let currentGear = 5;
-  let currentSpeed = 128;
-  let currentRpm = 3800;
-
-  // 親口錄音狀態
+  let igniting = false;
+  let standbyOwnsAudio = false;
+  let povMode = "night";
+  let hudResetTimer = null;
+  let toastTimer = null;
   let mediaRecorder = null;
   let audioChunks = [];
   let recordedBlobUrl = null;
 
+  // --------------------------------------------------------------------------
+  // Utilities
+  // --------------------------------------------------------------------------
   function loadState() {
+    const base = JSON.parse(JSON.stringify(defaultState));
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return JSON.parse(JSON.stringify(defaultState));
-      return Object.assign(JSON.parse(JSON.stringify(defaultState)), JSON.parse(raw));
+      if (!raw) return base;
+      const merged = Object.assign(base, JSON.parse(raw));
+      delete merged.ignitedToday; // legacy flag, now derived from lastIgnitionDate
+      return merged;
     } catch (e) {
-      return JSON.parse(JSON.stringify(defaultState));
+      console.warn("State load failed, using defaults:", e);
+      return base;
     }
   }
 
   function saveState() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (e) {}
+    } catch (e) {
+      console.warn("State save failed:", e);
+      toast("無法儲存資料（儲存空間不足？）");
+    }
   }
 
-  function getModel() {
-    return window.GENESIS_DATA.models.find((m) => m.id === state.modelId) || window.GENESIS_DATA.models[0];
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const pad3 = (n) => String(n).padStart(3, "0");
+  const fmtMoney = (n) => Math.round(n).toLocaleString("en-US");
+
+  function todayKey() {
+    const d = new Date();
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   }
 
-  function getPaint() {
-    return window.GENESIS_DATA.paints.find((p) => p.id === state.paintId) || window.GENESIS_DATA.paints[0];
-  }
-
-  function pad3(n) {
-    return String(n).padStart(3, "0");
-  }
-
-  function getDayNumber() {
-    if (simDayOverride !== null) return simDayOverride;
+  // DST-safe calendar-day index: 2026-10-21 = Day 1
+  function realDayNumber() {
     const now = new Date();
-    const diff = Math.floor((now.getTime() - START_DATE.getTime()) / 86400000) + 1;
-    return Math.max(1, Math.min(TOTAL_DAYS, diff));
+    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    const start = Date.UTC(2026, 9, 21);
+    const n = Math.round((today - start) / 86400000) + 1;
+    return Math.max(1, Math.min(TOTAL_DAYS, n));
+  }
+  const getDayNumber = () => (simDayOverride !== null ? simDayOverride : realDayNumber());
+  const isIgnitedToday = () => state.lastIgnitionDate === todayKey();
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
 
-  // ==========================================================================
-  // 全域遙測與小工具 UI 同步更新
-  // ==========================================================================
+  function toast(msg) {
+    const el = $("toast");
+    el.textContent = msg;
+    el.classList.add("is-show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("is-show"), 2200);
+  }
+
+  function paintRange(el) {
+    const min = Number(el.min || 0);
+    const max = Number(el.max || 100);
+    const pct = ((Number(el.value) - min) / (max - min)) * 100;
+    el.style.setProperty("--pct", pct + "%");
+  }
+
+  const getModel = () => D.models.find((m) => m.id === state.modelId) || D.models[0];
+  const getPaint = () => D.paints.find((p) => p.id === state.paintId) || D.paints[0];
+  const paintEn = (p) => p.name.split(" · ")[0];
+  const paintZh = (p) => p.name.split(" · ")[1] || p.name;
+
+  function openModal(id) {
+    $(id).classList.add("is-open");
+  }
+  function closeModal(id) {
+    $(id).classList.remove("is-open");
+  }
+
+  // --------------------------------------------------------------------------
+  // Telemetry (event-driven + every 30s; the ticker has its own light loop)
+  // --------------------------------------------------------------------------
   function syncAllTelemetry() {
     const model = getModel();
     const paint = getPaint();
-    const dayNum = getDayNumber();
-    const daysLeft = Math.max(0, TOTAL_DAYS - dayNum);
+    const day = getDayNumber();
+    const daysLeft = Math.max(0, TOTAL_DAYS - day);
     const fundPct = Math.min(100, (state.allocatedFund / Math.max(1, state.targetPrice)) * 100);
+    const ignited = isIgnitedToday();
 
-    document.documentElement.style.setProperty("--car-hex", paint.hex);
+    document.documentElement.style.setProperty("--car", paint.hex);
 
-    // 頂部狀態列
-    document.getElementById("top-model-label").textContent = `PORSCHE ${model.name.toUpperCase()}`;
-    document.getElementById("top-day-num").textContent = pad3(dayNum);
+    // Header
+    $("top-model-label").textContent = `Porsche ${model.name}`;
+    $("top-day-num").textContent = pad3(day);
 
-    // 即時時分秒毫秒倒數
-    const now = new Date();
-    const remMs = Math.max(0, TARGET_DATE.getTime() - now.getTime());
-    const totalSec = Math.floor(remMs / 1000);
-    const hh = String(Math.floor((totalSec % 86400) / 3600)).padStart(2, "0");
-    const mm = String(Math.floor((totalSec % 3600) / 60)).padStart(2, "0");
-    const ss = String(totalSec % 60).padStart(2, "0");
-    const tenths = Math.floor((remMs % 1000) / 100);
+    // 01 · Hero
+    $("hero-days-left").textContent = daysLeft;
+    $("hero-day-ratio").textContent = `${pad3(day)} / 911`;
+    $("hero-progress-pct").textContent = `${((day / TOTAL_DAYS) * 100).toFixed(1)}%`;
+    const halfRem = HALFWAY_DAY - day;
+    $("chrono-halfway-text").textContent = halfRem > 0 ? `T-${halfRem}D` : "Passed";
+    const ringLen = Math.max(2, (day / TOTAL_DAYS) * 289);
+    $("ignition-ring-arc").setAttribute("stroke-dasharray", `${ringLen.toFixed(1)} 289`);
+    updateTicker(true);
 
-    const tickerEl = document.getElementById("chrono-live-ticker");
-    if (tickerEl) {
-      tickerEl.textContent = `T-${daysLeft}D · ${hh}:${mm}:${ss}.${tenths}`;
+    // 01 · Build + fund + covenant
+    renderBuildTelemetry(day);
+    $("fund-pct-inline").textContent = `${fundPct.toFixed(1)}%`;
+    $("fund-current-big").textContent = `NT$ ${fmtMoney(state.allocatedFund)}`;
+    $("fund-target-small").textContent = `/ ${fmtMoney(state.targetPrice)}`;
+    $("chrono-fund-bar").style.width = `${fundPct}%`;
+    $("card-model-spec").textContent = `${model.code} · ${paintEn(paint)}`;
+    $("covenant-text-display").textContent = state.covenantText;
+    $("slider-day-label").textContent = `D${pad3(day)}`;
+
+    // 00 · Widgets
+    $("widget-lock-inline").textContent = `${model.code} · T-${daysLeft}D · 2029.04.18`;
+    $("widget-chrono-day").textContent = pad3(day);
+    $("widget-chrono-ratio").textContent = `${pad3(day)}/911`;
+    $("widget-chrono-arc").setAttribute("stroke-dasharray", `${Math.max(4, (day / TOTAL_DAYS) * 232).toFixed(1)} 240`);
+    $("widget-chrono-hand").setAttribute("transform", `rotate(${((day / TOTAL_DAYS) * 360).toFixed(1)} 50 50)`);
+    $("widget-alloc-pct").textContent = `${fundPct.toFixed(1)}%`;
+    $("widget-alloc-bar").style.width = `${Math.max(2, fundPct)}%`;
+    $("widget-ignition-state").textContent = ignited ? "IGNITED" : "READY";
+    $("widget-ignition-state").className = ignited ? "brass strong" : "red strong";
+    $("widget-tminus-days").textContent = `T-${daysLeft} DAYS`;
+    $("widget-car-code").textContent = model.code;
+    $("standby-mini-days").textContent = `${daysLeft}D`;
+
+    // Standby
+    $("standby-full-days").textContent = `${daysLeft}D`;
+    $("standby-full-daynum").textContent = `DAY ${pad3(day)} / 911`;
+    $("standby-full-pct").textContent = `${fundPct.toFixed(1)}%`;
+
+    // Ignition knob state (resets automatically on a new day)
+    if (!igniting) {
+      $("btn-left-ignition").classList.toggle("ignited", ignited);
+      const lbl = $("ignition-label-text");
+      lbl.textContent = ignited ? "Ignited today" : "Left ignition";
+      lbl.classList.toggle("on", ignited);
     }
-
-    const halfwayRem = 456 - dayNum;
-    document.getElementById("chrono-halfway-text").textContent =
-      halfwayRem > 0
-        ? `HALFWAY: 2028.01.19 (T-${halfwayRem}D TO D-456)`
-        : `HALFWAY PASSED // FINAL SPRINT TO 2029.04.18`;
-
-    // 更新 Screen 00 (Widgets)
-    document.getElementById("widget-lock-inline").textContent = `${model.code}  ·  T-${daysLeft}D  ·  2029.04.18`;
-    document.getElementById("widget-chrono-day").textContent = pad3(dayNum);
-    document.getElementById("widget-chrono-ratio").textContent = `${pad3(dayNum)}/911`;
-    const arcLen = Math.max(8, Math.round((dayNum / TOTAL_DAYS) * 238));
-    document.getElementById("widget-chrono-arc").setAttribute("stroke-dasharray", `${arcLen} 240`);
-    const angle = (dayNum / TOTAL_DAYS) * 360;
-    document.getElementById("widget-chrono-hand").setAttribute("transform", `rotate(${angle} 50 50)`);
-
-    document.getElementById("widget-alloc-pct").textContent = `${fundPct.toFixed(1)}%`;
-    document.getElementById("widget-alloc-bar").style.width = `${Math.max(2, fundPct)}%`;
-    document.getElementById("widget-ignition-state").textContent = state.ignitedToday ? "ACTIVE" : "READY";
-    document.getElementById("widget-tminus-days").textContent = `T-${daysLeft} DAYS`;
-    document.getElementById("widget-car-code").textContent = model.code;
-    document.getElementById("widget-car-accent-line").setAttribute("stroke", paint.hex);
-    document.getElementById("standby-mini-days").textContent = `${daysLeft}D`;
-
-    // StandBy 全螢幕彈窗數據
-    document.getElementById("standby-full-days").textContent = `${daysLeft}D`;
-    document.getElementById("standby-full-daynum").textContent = `DAY ${pad3(dayNum)} / 911`;
-    document.getElementById("standby-full-pct").textContent = `${fundPct.toFixed(1)}%`;
-
-    // 更新 Screen 01 (10階段生產排程與購車資本)
-    renderBuildTelemetry(dayNum);
-    document.getElementById("fund-pct-inline").textContent = `${fundPct.toFixed(1)}%`;
-    document.getElementById("fund-numbers-inline").textContent = `NT$ ${state.allocatedFund.toLocaleString()} / ${state.targetPrice.toLocaleString()}`;
-    document.getElementById("chrono-fund-bar").style.width = `${fundPct}%`;
-
-    // 對價契約黑卡
-    const shortPaint = paint.name.split(" · ")[0].toUpperCase();
-    document.getElementById("card-model-spec").textContent = `${model.code} · ${shortPaint}`;
-    document.getElementById("covenant-text-display").textContent = state.covenantText;
   }
 
-  function renderBuildTelemetry(dayNum) {
-    const stages = window.GENESIS_DATA.buildStages;
-    let currentIdx = 0;
-    stages.forEach((s, i) => {
-      if (dayNum >= s.day) currentIdx = i;
-    });
-    const inspectIdx = selectedStageIndex !== null ? selectedStageIndex : currentIdx;
-    const st = stages[inspectIdx];
+  function updateTicker(force) {
+    if (!force && (activeScreen !== "s1" || document.hidden)) return;
+    const daysLeft = Math.max(0, TOTAL_DAYS - getDayNumber());
+    const remMs = Math.max(0, TARGET_DATE.getTime() - Date.now());
+    const sec = Math.floor(remMs / 1000);
+    const hh = pad2(Math.floor((sec % 86400) / 3600));
+    const mm = pad2(Math.floor((sec % 3600) / 60));
+    const ss = pad2(sec % 60);
+    const tenth = Math.floor((remMs % 1000) / 100);
+    $("chrono-live-ticker").textContent = `T-${daysLeft}D · ${hh}:${mm}:${ss}.${tenth}`;
+  }
 
-    document.getElementById("build-stage-counter").textContent = `STAGE ${st.stage} / 10`;
-    document.getElementById("stage-code-text").textContent = `${st.code} // DAY ${pad3(st.day)}`;
-    document.getElementById("stage-status-tag").textContent =
-      dayNum >= st.day ? "UNLOCKED" : `LOCKED (D-${st.day})`;
-    document.getElementById("stage-title-text").textContent = st.zhTitle;
-    document.getElementById("stage-spec-text").textContent = st.spec;
-
-    const bar = document.getElementById("build-segments-bar");
-    bar.innerHTML = stages
-      .map((s, idx) => {
-        const unlocked = dayNum >= s.day;
-        const isSelected = idx === inspectIdx;
-        const bgClass = unlocked ? "bg-[#D5001C]" : "bg-white/10";
-        const ringClass = isSelected ? "ring-1 ring-[#C5A059]" : "";
-        return `<button data-sidx="${idx}" class="stage-seg-btn h-2 ${bgClass} ${ringClass} transition" title="${s.zhTitle}"></button>`;
-      })
+  function buildSegments() {
+    const bar = $("build-segments-bar");
+    bar.innerHTML = D.buildStages
+      .map((s, i) => `<button class="seg" data-sidx="${i}" aria-label="${escapeHtml(s.zhTitle)}"></button>`)
       .join("");
-
-    bar.querySelectorAll(".stage-seg-btn").forEach((btn) => {
+    bar.querySelectorAll(".seg").forEach((btn) => {
       btn.addEventListener("click", () => {
-        selectedStageIndex = Number(btn.getAttribute("data-sidx"));
-        window.genesisAudio.playTactileClick(820);
+        selectedStageIndex = Number(btn.dataset.sidx);
+        audio.playTactileClick(820);
         renderBuildTelemetry(getDayNumber());
       });
     });
   }
 
-  // ==========================================================================
-  // SCREEN 02: 實景級夜間公路與 360° 座艙光影渲染引擎 (Atmospheric Canvas)
-  // ==========================================================================
-  function initCockpitCanvas() {
-    const canvas = document.getElementById("cockpit-pov-canvas");
-    const box = document.getElementById("cockpit-viewport-box");
-    if (!canvas || !box) return;
-    const ctx = canvas.getContext("2d");
-
-    const resize = () => {
-      const r = box.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.max(300, r.width) * dpr;
-      canvas.height = Math.max(220, r.height) * dpr;
-    };
-    resize();
-    window.addEventListener("resize", resize);
-
-    let dragging = false;
-    let lastX = 0;
-    box.addEventListener("mousedown", (e) => {
-      dragging = true;
-      lastX = e.clientX;
+  function renderBuildTelemetry(day) {
+    const stages = D.buildStages;
+    let current = 0;
+    stages.forEach((s, i) => {
+      if (day >= s.day) current = i;
     });
-    window.addEventListener("mousemove", (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      lastX = e.clientX;
-      cabinYaw = Math.max(-110, Math.min(110, cabinYaw - dx * 0.45));
+    const idx = selectedStageIndex !== null ? selectedStageIndex : current;
+    const st = stages[idx];
+    const unlocked = day >= st.day;
+
+    $("build-stage-counter").textContent = `Stage ${st.stage} / 10`;
+    $("stage-code-text").textContent = `${st.code} · DAY ${pad3(st.day)}`;
+    const tag = $("stage-status-tag");
+    tag.textContent = unlocked ? "Unlocked" : `Day ${st.day}`;
+    tag.classList.toggle("tag-on", unlocked);
+    $("stage-title-text").textContent = st.zhTitle;
+    $("stage-spec-text").textContent = st.spec;
+
+    $("build-segments-bar").querySelectorAll(".seg").forEach((seg, i) => {
+      seg.classList.toggle("is-on", day >= stages[i].day);
+      seg.classList.toggle("is-selected", i === idx);
     });
-    window.addEventListener("mouseup", () => {
-      dragging = false;
-    });
-
-    box.addEventListener(
-      "touchstart",
-      (e) => {
-        if (e.touches.length === 1) {
-          dragging = true;
-          lastX = e.touches[0].clientX;
-        }
-      },
-      { passive: true }
-    );
-    box.addEventListener(
-      "touchmove",
-      (e) => {
-        if (!dragging || e.touches.length !== 1) return;
-        const dx = e.touches[0].clientX - lastX;
-        lastX = e.touches[0].clientX;
-        cabinYaw = Math.max(-110, Math.min(110, cabinYaw - dx * 0.45));
-      },
-      { passive: true }
-    );
-    window.addEventListener("touchend", () => {
-      dragging = false;
-    });
-
-    const renderLoop = (ts) => {
-      const w = canvas.width;
-      const h = canvas.height;
-      const paintHex = getPaint().hex;
-      ctx.clearRect(0, 0, w, h);
-
-      roadOffset += 0.045;
-      const horizonY = h * 0.42;
-      const panPx = -(cabinYaw / 90) * (w * 0.35);
-
-      // 1. 依模式繪製深邃天空與遠景光影
-      const sky = ctx.createLinearGradient(0, 0, 0, horizonY);
-      if (povMode === "coast") {
-        sky.addColorStop(0, "#0D1726");
-        sky.addColorStop(0.6, "#2E3D52");
-        sky.addColorStop(1, "#C57B57");
-      } else {
-        sky.addColorStop(0, "#04060A");
-        sky.addColorStop(0.6, "#0C121E");
-        sky.addColorStop(1, "#07090D");
-      }
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, w, h);
-
-      // 2. 公路流光透視線與遠方 911 尾燈殘影
-      const vanishX = w * 0.5 + panPx * 0.5;
-      ctx.strokeStyle = "rgba(255,255,255,0.12)";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(vanishX - 18, horizonY);
-      ctx.lineTo(w * 0.05, h * 0.76);
-      ctx.moveTo(vanishX + 18, horizonY);
-      ctx.lineTo(w * 0.95, h * 0.76);
-      ctx.stroke();
-
-      // 動態黃金中央分隔虛線
-      ctx.strokeStyle = "rgba(197, 160, 89, 0.45)";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([12, 16]);
-      ctx.lineDashOffset = -roadOffset * 28;
-      ctx.beginPath();
-      ctx.moveTo(vanishX, horizonY);
-      ctx.lineTo(w * 0.48, h * 0.76);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // 遠處前車紅光尾燈
-      ctx.fillStyle = "#D5001C";
-      ctx.fillRect(vanishX - 16, horizonY - 4, 9, 2.5);
-      ctx.fillRect(vanishX + 7, horizonY - 4, 9, 2.5);
-
-      // 3. 保時捷前行李廂蓋葉子板微弧光影
-      const centerX = w * 0.5 + panPx;
-      ctx.fillStyle = paintHex;
-      ctx.globalAlpha = 0.32;
-      ctx.beginPath();
-      ctx.moveTo(0, h * 0.67);
-      ctx.quadraticCurveTo(centerX - w * 0.22, h * 0.60, centerX, h * 0.63);
-      ctx.quadraticCurveTo(centerX + w * 0.22, h * 0.60, w, h * 0.67);
-      ctx.lineTo(w, h);
-      ctx.lineTo(0, h);
-      ctx.closePath();
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      // 4. 座艙真皮儀表台剪影與紅光環境氛圍燈帶
-      ctx.fillStyle = "#090A0E";
-      ctx.beginPath();
-      ctx.moveTo(0, h * 0.68);
-      ctx.quadraticCurveTo(centerX, h * 0.62, w, h * 0.68);
-      ctx.lineTo(w, h);
-      ctx.lineTo(0, h);
-      ctx.closePath();
-      ctx.fill();
-
-      // 儀表台紅光暈染
-      const glow = ctx.createRadialGradient(centerX - w * 0.08, h * 0.88, 5, centerX - w * 0.08, h * 0.88, w * 0.48);
-      glow.addColorStop(0, "rgba(213, 0, 28, 0.36)");
-      glow.addColorStop(1, "rgba(0, 0, 0, 0)");
-      ctx.fillStyle = glow;
-      ctx.fillRect(0, h * 0.55, w, h * 0.45);
-
-      // 貫穿式紅光氣氛燈線
-      ctx.strokeStyle = "#D5001C";
-      ctx.lineWidth = 1.8;
-      ctx.beginPath();
-      ctx.moveTo(0, h * 0.74);
-      ctx.quadraticCurveTo(centerX, h * 0.69, w, h * 0.74);
-      ctx.stroke();
-
-      // 中控頂部 Sport Chrono 碼錶環
-      const chronoX = centerX + w * 0.22;
-      const chronoY = h * 0.66;
-      ctx.strokeStyle = "#525660";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(chronoX, chronoY, 13, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.strokeStyle = "#D5001C";
-      ctx.beginPath();
-      ctx.moveTo(chronoX, chronoY);
-      ctx.lineTo(chronoX + Math.cos(ts * 0.002) * 10, chronoY + Math.sin(ts * 0.002) * 10);
-      ctx.stroke();
-
-      // 駕駛座方向盤極簡精密輪廓
-      const wheelX = centerX - w * 0.08;
-      const wheelY = h * 0.91;
-      const wheelR = Math.min(w * 0.22, 82);
-      ctx.strokeStyle = "#22252E";
-      ctx.lineWidth = 11;
-      ctx.beginPath();
-      ctx.arc(wheelX, wheelY, wheelR, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // 12點鐘競速黃回正標記
-      ctx.strokeStyle = "#F5C400";
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      ctx.moveTo(wheelX, wheelY - wheelR - 5);
-      ctx.lineTo(wheelX, wheelY - wheelR + 5);
-      ctx.stroke();
-
-      requestAnimationFrame(renderLoop);
-    };
-    requestAnimationFrame(renderLoop);
   }
 
-  // ==========================================================================
-  // SCREEN 03: 《A DAY IN 2029》與富人內外世界渲染
-  // ==========================================================================
-  function personalizeText(raw) {
+  // --------------------------------------------------------------------------
+  // Navigation
+  // --------------------------------------------------------------------------
+  function showScreen(target) {
+    if (target === activeScreen) return;
+    activeScreen = target;
+    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("is-active", t.dataset.target === target));
+    document.querySelectorAll(".screen").forEach((s) => {
+      s.hidden = s.id !== `screen-${target}`;
+    });
+    $("top-screen-title").textContent = SCREEN_TITLES[target];
+    $("app-main").scrollTop = 0;
+    if (target === "s2") cockpit.start();
+    else cockpit.stop();
+    if (target === "s4") signature.resize();
+    updateTicker(true);
+  }
+
+  // Android hardware back: close modal → return to Chrono → exit
+  window.__onBack = function () {
+    const open = document.querySelector(".modal.is-open");
+    if (open) {
+      if (open.id === "modal-standby") closeStandby();
+      else if (open.id === "modal-strobe") closeStrobe();
+      else closeModal(open.id);
+      return true;
+    }
+    if ($("covenant-flip-card").classList.contains("is-flipped")) {
+      $("covenant-flip-card").classList.remove("is-flipped");
+      return true;
+    }
+    if (activeScreen !== "s1") {
+      showScreen("s1");
+      return true;
+    }
+    return false;
+  };
+
+  // --------------------------------------------------------------------------
+  // Ignition
+  // --------------------------------------------------------------------------
+  function triggerIgnition() {
+    if (igniting) return;
+    igniting = true;
+    const knob = $("btn-left-ignition");
+    const lbl = $("ignition-label-text");
+    const shell = $("main-app-shell");
+    knob.classList.add("turning");
+    lbl.classList.remove("on");
+    lbl.textContent = "Cranking";
+    shell.classList.add("igniting-vibration");
+    setTimeout(() => shell.classList.remove("igniting-vibration"), 1300);
+
+    audio.playColdStart(
+      (rpm) => {
+        lbl.textContent = `${rpm} RPM`;
+        $("island-code-text").textContent = rpm;
+      },
+      () => {
+        knob.classList.remove("turning");
+        igniting = false;
+        state.lastIgnitionDate = todayKey();
+        saveState();
+        $("island-code-text").textContent = "911";
+        syncAllTelemetry();
+      }
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // 00 · Widget helpers
+  // --------------------------------------------------------------------------
+  const TOD_VIEWS = [
+    { key: "dawn", label: "Dawn · 06:00" },
+    { key: "noon", label: "Noon · 12:00" },
+    { key: "dusk", label: "Dusk · 18:00" }
+  ];
+
+  function applyTod() {
+    const v = TOD_VIEWS[todIdx];
+    $("widget-tod-label").textContent = v.label;
+    $("widget-car-frame").dataset.tod = v.key;
+  }
+
+  function nextAffirmation() {
+    affirmIdx = (affirmIdx + 1) % D.affirmations.length;
+    return D.affirmations[affirmIdx];
+  }
+
+  function wrapCanvasText(ctx, text, maxWidth) {
+    const lines = [];
+    let line = "";
+    for (const ch of text) {
+      const test = line + ch;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        lines.push(line);
+        line = ch;
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  function exportLockScreenWallpaper() {
+    const W = 1080;
+    const H = 2340;
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    const ctx = c.getContext("2d");
     const model = getModel();
     const paint = getPaint();
-    const zhColor = paint.name.split(" · ")[1] || paint.name;
+    const day = getDayNumber();
+    const daysLeft = Math.max(0, TOTAL_DAYS - day);
+    const sans = '-apple-system, Roboto, "Helvetica Neue", "Noto Sans TC", sans-serif';
+
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, "#050607");
+    bg.addColorStop(0.55, "#0e1014");
+    bg.addColorStop(1, "#050607");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const glow = ctx.createRadialGradient(W / 2, 1180, 40, W / 2, 1180, 620);
+    glow.addColorStop(0, "rgba(213,0,28,0.16)");
+    glow.addColorStop(1, "rgba(213,0,28,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 600, W, 1200);
+
+    // 911 side profile (same path as the widget)
+    const car = new Path2D(
+      "M10 50 C10 45 12 42 18 41 L66 35 C76 26 88 19 104 17 C120 15.5 134 17 146 22 C162 28 176 33 186 37 C190 39 191 43 190 48 L186 52 L166 52 A14 14 0 0 0 138 52 L62 52 A14 14 0 0 0 34 52 L14 52 C11 52 10 51 10 50 Z"
+    );
+    ctx.save();
+    ctx.translate(W / 2 - 400, 900);
+    ctx.scale(4, 4);
+    ctx.fillStyle = "#15171c";
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 0.4;
+    ctx.fill(car);
+    ctx.stroke(car);
+    ctx.strokeStyle = paint.hex;
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(177, 35.5);
+    ctx.lineTo(189.5, 41);
+    ctx.stroke();
+    ctx.fillStyle = "#08090b";
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.lineWidth = 0.6;
+    [48, 152].forEach((x) => {
+      ctx.beginPath();
+      ctx.arc(x, 52, 10.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    });
+    ctx.restore();
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#8c909a";
+    ctx.font = `500 30px ${sans}`;
+    ctx.fillText(`PORSCHE ${model.name.toUpperCase()}  ·  ${paintEn(paint).toUpperCase()}`, W / 2, 1210);
+
+    ctx.fillStyle = "#f2f1ed";
+    ctx.font = `200 168px ${sans}`;
+    ctx.fillText("2029.04.18", W / 2, 1420);
+
+    ctx.fillStyle = "#c5a059";
+    ctx.font = `500 38px ${sans}`;
+    ctx.fillText(`DAY ${pad3(day)} / 911   ·   T-${daysLeft} DAYS`, W / 2, 1510);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(W / 2 - 120, 1580);
+    ctx.lineTo(W / 2 + 120, 1580);
+    ctx.stroke();
+
+    ctx.fillStyle = "#c9c7c1";
+    ctx.font = `400 36px ${sans}`;
+    wrapCanvasText(ctx, state.covenantText, 820).slice(0, 4).forEach((ln, i) => {
+      ctx.fillText(ln, W / 2, 1660 + i * 58);
+    });
+
+    const dataUrl = c.toDataURL("image/png");
+    const filename = `PORSCHE-911-2029-04-18-DAY${pad3(day)}.png`;
+    const bridge = window.AndroidBridge;
+    if (bridge && typeof bridge.saveImage === "function") {
+      const ok = bridge.saveImage(dataUrl.split(",")[1], filename);
+      toast(ok ? "已儲存到相簿 Pictures/Porsche911" : "儲存失敗，請再試一次");
+      return;
+    }
+    const a = document.createElement("a");
+    a.download = filename;
+    a.href = dataUrl;
+    a.click();
+    toast("桌布已下載");
+  }
+
+  // --------------------------------------------------------------------------
+  // 02 · Cockpit renderer (runs only while the Cockpit tab is visible)
+  // --------------------------------------------------------------------------
+  const cockpit = (function () {
+    const canvas = $("cockpit-pov-canvas");
+    const box = $("cockpit-viewport-box");
+    const ctx = canvas.getContext("2d");
+    let cw = 0;
+    let ch = 0;
+    let running = false;
+    let rafId = 0;
+    let yaw = 0;
+    let dragging = false;
+    let lastX = 0;
+    let lastDragTs = 0;
+    let travel = 0;
+    let lastTs = 0;
+
+    const stars = Array.from({ length: 46 }, () => ({ x: Math.random(), y: Math.random() * 0.36, r: Math.random() * 0.9 + 0.3, a: Math.random() * 0.5 + 0.2 }));
+    const skyline = Array.from({ length: 22 }, (_, i) => ({ x: i / 22, w: 0.025 + Math.random() * 0.03, h: 6 + Math.random() * 22, lit: Math.random() }));
+
+    function resize() {
+      const r = box.getBoundingClientRect();
+      if (!r.width) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      cw = r.width;
+      ch = r.height;
+      canvas.width = Math.round(cw * dpr);
+      canvas.height = Math.round(ch * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function onDown(x) {
+      dragging = true;
+      lastX = x;
+      lastDragTs = performance.now();
+    }
+    function onMove(x) {
+      if (!dragging) return;
+      const dx = x - lastX;
+      lastX = x;
+      lastDragTs = performance.now();
+      yaw = Math.max(-75, Math.min(75, yaw - dx * 0.35));
+    }
+    box.addEventListener("mousedown", (e) => onDown(e.clientX));
+    window.addEventListener("mousemove", (e) => onMove(e.clientX));
+    window.addEventListener("mouseup", () => (dragging = false));
+    box.addEventListener("touchstart", (e) => e.touches.length === 1 && onDown(e.touches[0].clientX), { passive: true });
+    box.addEventListener("touchmove", (e) => e.touches.length === 1 && onMove(e.touches[0].clientX), { passive: true });
+    window.addEventListener("touchend", () => (dragging = false));
+    window.addEventListener("resize", () => running && resize());
+
+    function draw(ts) {
+      const dt = lastTs ? Math.min(50, ts - lastTs) : 16;
+      lastTs = ts;
+      const mode = povMode;
+      const moving = mode !== "cabin360";
+      if (moving) travel += dt * (mode === "night" ? 0.0011 : 0.0008);
+
+      // Auto look-around in cabin mode, gentle return to centre while driving
+      const idle = !dragging && ts - lastDragTs > 2500;
+      if (idle) {
+        const target = mode === "cabin360" ? Math.sin(ts * 0.00035) * 38 : 0;
+        yaw += (target - yaw) * 0.02;
+      }
+
+      const curve = moving ? Math.sin(ts * 0.00028) * 0.06 : 0;
+      const pan = -(yaw / 90) * cw * 0.55;
+      const horizon = ch * 0.43;
+      const vx = cw * 0.5 + pan * 0.6 + curve * cw;
+
+      ctx.clearRect(0, 0, cw, ch);
+
+      // Sky
+      const sky = ctx.createLinearGradient(0, 0, 0, horizon);
+      if (mode === "coast") {
+        sky.addColorStop(0, "#0f1a2b");
+        sky.addColorStop(0.55, "#3a3f55");
+        sky.addColorStop(1, "#d98a5c");
+      } else if (mode === "cabin360") {
+        sky.addColorStop(0, "#141619");
+        sky.addColorStop(1, "#202329");
+      } else {
+        sky.addColorStop(0, "#03050a");
+        sky.addColorStop(0.7, "#0a1020");
+        sky.addColorStop(1, "#151a28");
+      }
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, cw, horizon + 1);
+
+      if (mode === "night") {
+        stars.forEach((s) => {
+          ctx.globalAlpha = s.a;
+          ctx.fillStyle = "#dfe6ff";
+          ctx.beginPath();
+          ctx.arc(((s.x * cw + pan * 0.2) % cw + cw) % cw, s.y * ch, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        ctx.globalAlpha = 1;
+        const cityGlow = ctx.createRadialGradient(vx, horizon, 4, vx, horizon, cw * 0.55);
+        cityGlow.addColorStop(0, "rgba(255,140,80,0.22)");
+        cityGlow.addColorStop(1, "rgba(255,140,80,0)");
+        ctx.fillStyle = cityGlow;
+        ctx.fillRect(0, horizon - ch * 0.25, cw, ch * 0.3);
+        skyline.forEach((b) => {
+          const bx = vx - cw * 0.45 + b.x * cw * 0.9;
+          ctx.fillStyle = "#07090f";
+          ctx.fillRect(bx, horizon - b.h, b.w * cw, b.h);
+          if (b.lit > 0.45) {
+            ctx.fillStyle = "rgba(255,200,140,0.5)";
+            ctx.fillRect(bx + 2, horizon - b.h + 3, 1.5, 1.5);
+          }
+        });
+      } else if (mode === "coast") {
+        const sunX = vx + cw * 0.22;
+        const sun = ctx.createRadialGradient(sunX, horizon - 6, 2, sunX, horizon - 6, 90);
+        sun.addColorStop(0, "rgba(255,226,170,0.95)");
+        sun.addColorStop(0.25, "rgba(255,170,110,0.45)");
+        sun.addColorStop(1, "rgba(255,150,90,0)");
+        ctx.fillStyle = sun;
+        ctx.fillRect(sunX - 100, horizon - 100, 200, 110);
+      } else {
+        // Garage ceiling light strips
+        ctx.strokeStyle = "rgba(255,255,255,0.22)";
+        ctx.lineWidth = 2;
+        for (let i = -4; i <= 4; i++) {
+          const x = cw * 0.5 + pan + i * cw * 0.28;
+          ctx.beginPath();
+          ctx.moveTo(x - 30, ch * 0.08);
+          ctx.lineTo(x + 30, ch * 0.08);
+          ctx.stroke();
+        }
+      }
+
+      // Ground
+      const ground = ctx.createLinearGradient(0, horizon, 0, ch);
+      ground.addColorStop(0, mode === "coast" ? "#2a3446" : mode === "cabin360" ? "#1a1c20" : "#0b0d12");
+      ground.addColorStop(1, "#050607");
+      ctx.fillStyle = ground;
+      ctx.fillRect(0, horizon, cw, ch - horizon);
+
+      if (mode === "coast") {
+        ctx.strokeStyle = "rgba(255,200,150,0.18)";
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 6; i++) {
+          const y = horizon + 4 + i * 6;
+          const off = Math.sin(ts * 0.001 + i) * 10;
+          ctx.beginPath();
+          ctx.moveTo(vx + cw * 0.12 + off, y);
+          ctx.lineTo(vx + cw * 0.34 + off, y);
+          ctx.stroke();
+        }
+      }
+
+      // Road
+      const roadBottom = ch * 0.78;
+      const halfBottom = cw * 0.62;
+      ctx.fillStyle = mode === "cabin360" ? "#121417" : "#0e1015";
+      ctx.beginPath();
+      ctx.moveTo(vx - 6, horizon);
+      ctx.lineTo(vx + 6, horizon);
+      ctx.lineTo(cw * 0.5 + pan + halfBottom, roadBottom);
+      ctx.lineTo(cw * 0.5 + pan - halfBottom, roadBottom);
+      ctx.closePath();
+      ctx.fill();
+
+      const lerpX = (side, z) => vx + (cw * 0.5 + pan + side * halfBottom - vx) * z;
+      const zToY = (z) => horizon + (roadBottom - horizon) * z;
+
+      ctx.strokeStyle = "rgba(255,255,255,0.16)";
+      ctx.lineWidth = 1.2;
+      [-0.92, 0.92].forEach((side) => {
+        ctx.beginPath();
+        ctx.moveTo(lerpX(side, 0), horizon);
+        ctx.lineTo(lerpX(side, 1), roadBottom);
+        ctx.stroke();
+      });
+
+      // Centre dashes (perspective-correct)
+      const N = 9;
+      for (let i = 0; i < N; i++) {
+        const t0 = ((i + travel) % N) / N;
+        const z0 = t0 * t0;
+        const z1 = Math.min(1, (t0 + 0.045) * (t0 + 0.045));
+        ctx.strokeStyle = `rgba(197,160,89,${0.25 + z0 * 0.5})`;
+        ctx.lineWidth = 0.8 + z0 * 3;
+        ctx.beginPath();
+        ctx.moveTo(lerpX(0, z0), zToY(z0));
+        ctx.lineTo(lerpX(0, z1), zToY(z1));
+        ctx.stroke();
+      }
+
+      // Street lamps (night) passing by
+      if (mode === "night") {
+        const L = 6;
+        for (let i = 0; i < L; i++) {
+          const t = ((i + travel * 0.7) % L) / L;
+          const z = t * t;
+          [-1.25, 1.25].forEach((side) => {
+            const x = lerpX(side, z);
+            const y = zToY(z) - (8 + z * 90);
+            const r = 1 + z * 9;
+            const g = ctx.createRadialGradient(x, y, 0, x, y, r * 4);
+            g.addColorStop(0, "rgba(255,214,160,0.9)");
+            g.addColorStop(0.25, "rgba(255,180,110,0.35)");
+            g.addColorStop(1, "rgba(255,180,110,0)");
+            ctx.fillStyle = g;
+            ctx.fillRect(x - r * 4, y - r * 4, r * 8, r * 8);
+          });
+        }
+        // Tail lights ahead
+        ctx.fillStyle = "#d5001c";
+        ctx.shadowColor = "#d5001c";
+        ctx.shadowBlur = 8;
+        ctx.fillRect(vx - 12, horizon + 5, 6, 2);
+        ctx.fillRect(vx + 6, horizon + 5, 6, 2);
+        ctx.shadowBlur = 0;
+      }
+
+      // A-pillars (visible when looking around)
+      if (mode === "cabin360" || Math.abs(yaw) > 5) {
+        ctx.fillStyle = "#040506";
+        [-1, 1].forEach((side) => {
+          const baseX = cw * 0.5 + pan + side * cw * 0.62;
+          ctx.beginPath();
+          ctx.moveTo(baseX - side * cw * 0.02, 0);
+          ctx.lineTo(baseX + side * cw * 0.16, 0);
+          ctx.lineTo(baseX + side * cw * 0.02, ch * 0.66);
+          ctx.lineTo(baseX - side * cw * 0.14, ch * 0.66);
+          ctx.closePath();
+          ctx.fill();
+        });
+        // Rear-view mirror
+        ctx.fillStyle = "#08090b";
+        ctx.strokeStyle = "rgba(255,255,255,0.08)";
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(cw * 0.5 + pan - 34, 52, 68, 16, 6) : ctx.rect(cw * 0.5 + pan - 34, 52, 68, 16);
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      // Bonnet in paint colour
+      const paintHex = getPaint().hex;
+      const cx = cw * 0.5 + pan;
+      ctx.save();
+      ctx.globalAlpha = 0.34;
+      ctx.fillStyle = paintHex;
+      ctx.beginPath();
+      ctx.moveTo(cx - cw * 0.75, ch * 0.7);
+      ctx.quadraticCurveTo(cx - cw * 0.25, ch * 0.6, cx, ch * 0.615);
+      ctx.quadraticCurveTo(cx + cw * 0.25, ch * 0.6, cx + cw * 0.75, ch * 0.7);
+      ctx.lineTo(cx + cw * 0.75, ch);
+      ctx.lineTo(cx - cw * 0.75, ch);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx - cw * 0.5, ch * 0.655);
+      ctx.quadraticCurveTo(cx, ch * 0.6, cx + cw * 0.5, ch * 0.655);
+      ctx.stroke();
+
+      // Dashboard
+      ctx.fillStyle = "#07080a";
+      ctx.beginPath();
+      ctx.moveTo(0, ch * 0.7);
+      ctx.quadraticCurveTo(cx, ch * 0.635, cw, ch * 0.7);
+      ctx.lineTo(cw, ch);
+      ctx.lineTo(0, ch);
+      ctx.closePath();
+      ctx.fill();
+
+      const dashGlow = ctx.createRadialGradient(cx - cw * 0.1, ch * 0.86, 4, cx - cw * 0.1, ch * 0.86, cw * 0.5);
+      dashGlow.addColorStop(0, "rgba(213,0,28,0.28)");
+      dashGlow.addColorStop(1, "rgba(213,0,28,0)");
+      ctx.fillStyle = dashGlow;
+      ctx.fillRect(0, ch * 0.62, cw, ch * 0.38);
+
+      ctx.strokeStyle = "rgba(213,0,28,0.85)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(0, ch * 0.735);
+      ctx.quadraticCurveTo(cx, ch * 0.68, cw, ch * 0.735);
+      ctx.stroke();
+
+      // Sport Chrono
+      const chx = cx + cw * 0.18;
+      const chy = ch * 0.655;
+      ctx.fillStyle = "#0b0c0f";
+      ctx.strokeStyle = "rgba(255,255,255,0.28)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(chx, chy, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      const ang = (ts / 1000) * ((Math.PI * 2) / 60) - Math.PI / 2;
+      ctx.strokeStyle = "#d5001c";
+      ctx.beginPath();
+      ctx.moveTo(chx, chy);
+      ctx.lineTo(chx + Math.cos(ang) * 8, chy + Math.sin(ang) * 8);
+      ctx.stroke();
+
+      // Steering wheel (left-hand drive)
+      const wx = cx - cw * 0.12;
+      const wy = ch * 0.98;
+      const wr = Math.min(cw * 0.26, 96);
+      ctx.save();
+      ctx.translate(wx, wy);
+      ctx.rotate(curve * 2.2);
+      ctx.strokeStyle = "#1c1f25";
+      ctx.lineWidth = 11;
+      ctx.beginPath();
+      ctx.arc(0, 0, wr, Math.PI * 1.05, Math.PI * 1.95);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(0, 0, wr + 5, Math.PI * 1.08, Math.PI * 1.92);
+      ctx.stroke();
+      ctx.strokeStyle = "#f5c400";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(0, -wr - 5);
+      ctx.lineTo(0, -wr + 5);
+      ctx.stroke();
+      ctx.restore();
+
+      rafId = requestAnimationFrame(draw);
+    }
+
+    return {
+      start() {
+        if (running) return;
+        running = true;
+        lastTs = 0;
+        resize();
+        rafId = requestAnimationFrame(draw);
+      },
+      stop() {
+        running = false;
+        cancelAnimationFrame(rafId);
+      },
+      get running() {
+        return running;
+      }
+    };
+  })();
+
+  function applyPov(mode) {
+    povMode = mode;
+    const p = POV_PRESETS[mode];
+    document.querySelectorAll(".pov-mode-btn").forEach((b) => b.classList.toggle("is-active", b.dataset.pov === mode));
+    $("viewport-hint").hidden = mode !== "cabin360";
+    $("cockpit-pcm").hidden = mode === "cabin360"; // keep the interior visible while looking around
+    setHud(p.gear, p.speed, p.rpm);
+    audio.updateSoundscapeRpm(Math.max(1200, p.rpm));
+  }
+
+  function setHud(gear, speed, rpm) {
+    $("hud-gear-speed").textContent = gear === "P" ? "P · PARKED" : `${gear} · ${speed} KM/H`;
+    $("hud-rpm-readout").textContent = `${rpm.toLocaleString("en-US")} RPM`;
+  }
+
+  // --------------------------------------------------------------------------
+  // 03 · Chapters, psyche, scenarios
+  // --------------------------------------------------------------------------
+  function personalize(raw) {
+    const paint = getPaint();
     return raw
       .replace(/\{city\}/g, state.city)
       .replace(/\{business\}/g, state.business)
       .replace(/\{partner\}/g, state.partner)
-      .replace(/\{model\}/g, model.name)
-      .replace(/\{color\}/g, zhColor);
+      .replace(/\{model\}/g, getModel().name)
+      .replace(/\{color\}/g, paintZh(paint));
   }
 
   function renderChapters() {
-    const chapters = window.GENESIS_DATA.timelineChapters;
+    const chapters = D.timelineChapters;
     const ch = chapters[activeChapterIdx];
+    $("ch-freq-badge").textContent = ch.freq;
+    $("ch-code-label").textContent = `${ch.code} · ${ch.time}`;
+    $("ch-title-label").textContent = ch.title;
 
-    document.getElementById("ch-freq-badge").textContent = `${ch.freq} · ${ch.time}`;
-    document.getElementById("ch-code-label").textContent = ch.code;
-    document.getElementById("ch-title-label").textContent = ch.title;
-
-    const tabsBar = document.getElementById("chapter-tabs-bar");
-    tabsBar.innerHTML = chapters
-      .map((item, idx) => {
-        const active = idx === activeChapterIdx;
-        const cls = active
-          ? "bg-[#D5001C] text-white font-semibold"
-          : "bg-white/5 text-[#8E929B] hover:text-white";
-        return `<button data-cidx="${idx}" class="ch-tab-btn py-1.5 rounded transition ${cls}">${item.time.split(" ")[0]}</button>`;
-      })
+    $("chapter-tabs-bar").innerHTML = chapters
+      .map((c, i) => `<button data-cidx="${i}" class="${i === activeChapterIdx ? "is-active" : ""}">${c.time.split(" ")[0]}</button>`)
       .join("");
-
-    tabsBar.querySelectorAll(".ch-tab-btn").forEach((btn) => {
+    $("chapter-tabs-bar").querySelectorAll("button").forEach((btn) => {
       btn.addEventListener("click", () => {
-        activeChapterIdx = Number(btn.getAttribute("data-cidx"));
+        stopChapter();
+        activeChapterIdx = Number(btn.dataset.cidx);
         activeLineIdx = 0;
-        window.genesisAudio.playTactileClick(760);
+        audio.playTactileClick(760);
         renderChapters();
+        $("ch-lines-container").scrollTop = 0;
       });
     });
 
-    const linesBox = document.getElementById("ch-lines-container");
-    linesBox.innerHTML = ch.lines
-      .map((line, idx) => {
-        const isCurrent = idx === activeLineIdx;
-        const cls = isCurrent ? "text-[#F4F3EF] font-medium" : "text-[#8E929B]";
-        return `<p data-lidx="${idx}" class="ch-script-line cursor-pointer transition ${cls}">${personalizeText(line)}</p>`;
-      })
+    $("ch-lines-container").innerHTML = ch.lines
+      .map((ln, i) => `<p data-lidx="${i}" class="${i === activeLineIdx ? "is-current" : ""}">${escapeHtml(personalize(ln))}</p>`)
       .join("");
-
-    linesBox.querySelectorAll(".ch-script-line").forEach((p) => {
+    $("ch-lines-container").querySelectorAll("p").forEach((p) => {
       p.addEventListener("click", () => {
-        activeLineIdx = Number(p.getAttribute("data-lidx"));
-        renderChapters();
-        window.genesisAudio.speak(p.textContent);
+        stopChapter();
+        activeLineIdx = Number(p.dataset.lidx);
+        highlightLine();
+        audio.speak(p.textContent);
       });
     });
+  }
+
+  function highlightLine() {
+    const box = $("ch-lines-container");
+    box.querySelectorAll("p").forEach((p, i) => p.classList.toggle("is-current", i === activeLineIdx));
+    const cur = box.querySelector("p.is-current");
+    if (cur) box.scrollTo({ top: Math.max(0, cur.offsetTop - 12), behavior: "smooth" });
+  }
+
+  function setPlayButton(playing) {
+    const btn = $("btn-play-chapter");
+    btn.querySelector("span").textContent = playing ? "Playing…" : "Play chapter";
+    btn.disabled = playing;
+  }
+
+  function playChapter() {
+    const ch = D.timelineChapters[activeChapterIdx];
+    const token = ++playToken;
+    audio.startSoundscape(2200, ch.binauralHz);
+    activeLineIdx = 0;
+    setPlayButton(true);
+    if (!audio.canSpeak()) toast("此裝置無語音合成，將以字幕方式播放");
+
+    const step = () => {
+      if (token !== playToken) return;
+      if (activeLineIdx >= ch.lines.length) {
+        stopChapter();
+        toast("本章節播放完畢");
+        return;
+      }
+      highlightLine();
+      const text = personalize(ch.lines[activeLineIdx]);
+      const next = () => {
+        if (token !== playToken) return;
+        setTimeout(() => {
+          if (token !== playToken) return;
+          activeLineIdx++;
+          step();
+        }, 1300);
+      };
+      if (audio.canSpeak()) audio.speak(text, { onEnd: next });
+      else setTimeout(next, Math.max(2500, text.length * 170));
+    };
+    step();
+  }
+
+  function stopChapter() {
+    playToken++;
+    audio.stopSpeaking();
+    audio.stopSoundscape();
+    setPlayButton(false);
+    syncSoundscapeButton();
   }
 
   function renderPsycheCard() {
-    const list = window.GENESIS_DATA.psycheMatrix;
-    const item = list[psycheIdx % list.length];
-    document.getElementById("psyche-code-text").textContent = item.code;
-    document.getElementById("psyche-index-text").textContent = `${(psycheIdx % list.length) + 1} OF ${list.length}`;
-    document.getElementById("psyche-title-text").textContent = item.title;
-    document.getElementById("psyche-outer-text").textContent = item.outer;
-    document.getElementById("psyche-inner-text").textContent = item.inner;
-    document.getElementById("psyche-old-text").textContent = `OLD: ${item.oldScript}`;
-    document.getElementById("psyche-new-text").textContent = `911 STANDARD: ${item.newScript}`;
+    const list = D.psycheMatrix;
+    const i = psycheIdx % list.length;
+    const item = list[i];
+    $("psyche-code-text").textContent = item.code;
+    $("psyche-index-text").textContent = `${i + 1} / ${list.length}`;
+    $("psyche-title-text").textContent = item.title;
+    $("psyche-outer-text").textContent = item.outer;
+    $("psyche-inner-text").textContent = item.inner;
+    $("psyche-old-text").textContent = item.oldScript;
+    $("psyche-new-text").textContent = item.newScript;
   }
 
   function renderScenarioCard() {
-    const list = window.GENESIS_DATA.scenarios;
+    const list = D.scenarios;
     const sc = list[scenarioIdx % list.length];
-    document.getElementById("sc-code-label").textContent = sc.code;
-    document.getElementById("sc-prompt-text").textContent = sc.prompt;
-    const analysisBox = document.getElementById("sc-analysis-box");
-    analysisBox.classList.add("hidden");
-
-    const choicesBox = document.getElementById("sc-choices-box");
-    choicesBox.innerHTML = sc.choices
-      .map(
-        (c, idx) => `
-      <button data-choice="${idx}" class="sc-choice-btn w-full text-left bg-[#090A0C] hover:border-white/40 border border-white/15 rounded-lg p-2.5 text-xs text-[#E8E6E1] transition">
-        ${c.label}
-      </button>
-    `
-      )
-      .join("");
-
-    choicesBox.querySelectorAll(".sc-choice-btn").forEach((btn) => {
+    $("sc-code-label").textContent = sc.code.replace(/^SCENARIO\s+(\d+)\s*\/\/\s*/, "$1 · ");
+    $("sc-prompt-text").textContent = sc.prompt;
+    $("sc-analysis-box").hidden = true;
+    const box = $("sc-choices-box");
+    box.innerHTML = sc.choices.map((c, i) => `<button class="choice" data-choice="${i}">${escapeHtml(c.label)}</button>`).join("");
+    box.querySelectorAll(".choice").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const idx = Number(btn.getAttribute("data-choice"));
-        const chosen = sc.choices[idx];
-        analysisBox.textContent = chosen.analysis;
-        analysisBox.classList.remove("hidden");
-        window.genesisAudio.playTactileClick(chosen.optimal ? 980 : 340);
+        const chosen = sc.choices[Number(btn.dataset.choice)];
+        box.querySelectorAll(".choice").forEach((b) => b.classList.remove("is-best", "is-weak"));
+        btn.classList.add(chosen.optimal ? "is-best" : "is-weak");
+        const a = $("sc-analysis-box");
+        a.textContent = chosen.analysis;
+        a.hidden = false;
+        audio.playTactileClick(chosen.optimal ? 980 : 340);
       });
     });
   }
 
-  // ==========================================================================
-  // SCREEN 04: 369 金屬迎賓門檻手寫簽名板與車主手札
-  // ==========================================================================
-  function initSignaturePad() {
-    const canvas = document.getElementById("signature-pad-canvas");
-    if (!canvas) return;
+  // --------------------------------------------------------------------------
+  // 04 · Signature plate & log
+  // --------------------------------------------------------------------------
+  const signature = (function () {
+    const canvas = $("signature-pad-canvas");
     const ctx = canvas.getContext("2d");
-
-    const drawPlateBase = () => {
-      const r = canvas.parentElement.getBoundingClientRect();
-      canvas.width = Math.max(260, r.width);
-      canvas.height = Math.max(88, r.height);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
-      ctx.font = "700 22px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText("PORSCHE 911 // 2029.04.18", canvas.width / 2, canvas.height / 2 + 8);
-    };
-
-    setTimeout(drawPlateBase, 80);
-    window.addEventListener("resize", drawPlateBase);
-
     let drawing = false;
-    const pos = (e) => {
-      const r = canvas.getBoundingClientRect();
-      const x = e.touches ? e.touches[0].clientX : e.clientX;
-      const y = e.touches ? e.touches[0].clientY : e.clientY;
-      return { x: x - r.left, y: y - r.top };
-    };
+    let hasInk = false;
+    let w = 0;
+    let h = 0;
 
-    const start = (e) => {
+    function drawBase() {
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "rgba(255,255,255,0.05)";
+      ctx.font = `600 ${Math.min(20, w / 15)}px -apple-system, Roboto, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("PORSCHE 911  ·  2029.04.18", w / 2, h / 2);
+      hasInk = false;
+    }
+    function resize() {
+      const r = canvas.parentElement.getBoundingClientRect();
+      if (!r.width) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = r.width;
+      h = r.height;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawBase();
+    }
+    function pos(e) {
+      const r = canvas.getBoundingClientRect();
+      const p = e.touches ? e.touches[0] : e;
+      return { x: p.clientX - r.left, y: p.clientY - r.top };
+    }
+    function start(e) {
       drawing = true;
       const p = pos(e);
       ctx.beginPath();
       ctx.moveTo(p.x, p.y);
-    };
-    const move = (e) => {
+    }
+    function move(e) {
       if (!drawing) return;
       if (e.cancelable) e.preventDefault();
       const p = pos(e);
-      ctx.strokeStyle = "#C5A059";
-      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = "#c5a059";
+      ctx.lineWidth = 2.4;
       ctx.lineCap = "round";
+      ctx.lineJoin = "round";
       ctx.lineTo(p.x, p.y);
       ctx.stroke();
-    };
-    const end = () => {
-      drawing = false;
-    };
-
+      hasInk = true;
+    }
     canvas.addEventListener("mousedown", start);
     canvas.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", end);
+    window.addEventListener("mouseup", () => (drawing = false));
     canvas.addEventListener("touchstart", start, { passive: false });
     canvas.addEventListener("touchmove", move, { passive: false });
-    window.addEventListener("touchend", end);
+    window.addEventListener("touchend", () => (drawing = false));
+    window.addEventListener("resize", () => activeScreen === "s4" && resize());
 
-    document.getElementById("btn-clear-sig").addEventListener("click", () => {
-      drawPlateBase();
-      window.genesisAudio.playTactileClick(520);
-    });
+    return { resize, clear: drawBase, get hasInk() { return hasInk; } };
+  })();
 
-    document.getElementById("btn-commit-sig").addEventListener("click", () => {
-      state.sigCount = (state.sigCount % 9) + 1;
-      saveState();
-      document.getElementById("sig-counter-label").textContent = `${String(state.sigCount).padStart(2, "0")} / 09 COMPLETED`;
-      drawPlateBase();
-      window.genesisAudio.playTactileClick(1040);
-    });
+  function renderSigCounter() {
+    if (state.sigDate !== todayKey()) {
+      state.sigCount = 0;
+      state.sigDate = todayKey();
+    }
+    $("sig-counter-label").textContent = `${pad2(state.sigCount)} / 09`;
   }
 
   function renderCustodianLogs() {
-    document.getElementById("sig-counter-label").textContent = `${String(state.sigCount).padStart(2, "0")} / 09 COMPLETED`;
-    const box = document.getElementById("custodian-log-list");
-    box.innerHTML = state.logs
-      .map((item, idx) => {
-        const borderCol = item.tag === "HIGH-LEVERAGE" ? "border-[#D5001C]" : "border-[#C5A059]";
-        return `
-        <div class="border-l-2 ${borderCol} pl-2.5 py-0.5">
-          <div class="font-mono text-[11px] text-[#8E929B]">${item.day} · ${item.tag}</div>
-          <div class="text-xs text-[#E8E6E1] mt-0.5">${item.text}</div>
-        </div>
-      `;
-      })
+    $("custodian-log-list").innerHTML = state.logs
+      .map(
+        (item) => `
+        <div class="log-item ${item.tag === "HIGH-LEVERAGE" ? "lev" : ""}">
+          <div class="log-meta">${escapeHtml(item.day)} · ${escapeHtml(LOG_TAG_LABELS[item.tag] || item.tag)}</div>
+          <div class="log-text">${escapeHtml(item.text)}</div>
+        </div>`
+      )
       .join("");
   }
 
-  // ==========================================================================
-  // 匯出 2029.04.18 原廠風格手機鎖定畫面桌布 (PNG Export)
-  // ==========================================================================
-  function exportLockScreenWallpaper() {
-    const c = document.createElement("canvas");
-    c.width = 1170;
-    c.height = 2532;
-    const ctx = c.getContext("2d");
-    const model = getModel();
-    const paint = getPaint();
-    const dayNum = getDayNumber();
-    const daysLeft = Math.max(0, TOTAL_DAYS - dayNum);
-
-    // 深邃黑金漸層背景
-    const grad = ctx.createLinearGradient(0, 0, 0, c.height);
-    grad.addColorStop(0, "#07080A");
-    grad.addColorStop(0.5, "#101218");
-    grad.addColorStop(1, "#060709");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, c.width, c.height);
-
-    // 細緻工業網格線
-    ctx.strokeStyle = "rgba(255,255,255,0.06)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(80, 760, c.width - 160, 1180);
-
-    // 品牌與車型標題
-    ctx.fillStyle = "#8E929B";
-    ctx.font = "600 28px monospace";
-    ctx.textAlign = "center";
-    ctx.fillText("STUTTGART-ZUFFENHAUSEN // COMMISSIONING ORDER", c.width / 2, 850);
-
-    ctx.fillStyle = "#F4F3EF";
-    ctx.font = "700 64px -apple-system, sans-serif";
-    ctx.fillText(`PORSCHE ${model.name.toUpperCase()}`, c.width / 2, 950);
-
-    // 車色光帶
-    ctx.strokeStyle = paint.hex;
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.moveTo(320, 1010);
-    ctx.lineTo(c.width - 320, 1010);
-    ctx.stroke();
-
-    // 交車日期與倒數
-    ctx.fillStyle = "#C5A059";
-    ctx.font = "700 96px monospace";
-    ctx.fillText("2029.04.18", c.width / 2, 1180);
-
-    ctx.fillStyle = "#F4F3EF";
-    ctx.font = "600 44px monospace";
-    ctx.fillText(`DAY ${pad3(dayNum)} / 911  ·  T-${daysLeft} DAYS`, c.width / 2, 1275);
-
-    // 李小龍對價宣言
-    ctx.fillStyle = "#8E929B";
-    ctx.font = "500 32px -apple-system, sans-serif";
-    const text = state.covenantText;
-    ctx.fillText(text.slice(0, 26), c.width / 2, 1480);
-    if (text.length > 26) ctx.fillText(text.slice(26, 52), c.width / 2, 1540);
-    if (text.length > 52) ctx.fillText(text.slice(52), c.width / 2, 1600);
-
-    const link = document.createElement("a");
-    link.download = `PORSCHE-911-2029-04-18-DAY${pad3(dayNum)}.png`;
-    link.href = c.toDataURL("image/png");
-    link.click();
+  // --------------------------------------------------------------------------
+  // Soundscape / standby / strobe
+  // --------------------------------------------------------------------------
+  function syncSoundscapeButton() {
+    const btn = $("btn-toggle-soundscape");
+    const on = audio.soundscapeActive;
+    btn.querySelector("span").textContent = on ? "Stop audio" : "Start audio";
+    btn.classList.toggle("btn-red", !on);
+    btn.classList.toggle("btn-light", on);
   }
 
-  // ==========================================================================
-  // 事件綁定
-  // ==========================================================================
+  function openStandby() {
+    openModal("modal-standby");
+    if (!audio.soundscapeActive) {
+      audio.startSoundscape(1800, 6);
+      standbyOwnsAudio = true;
+    }
+  }
+  function closeStandby() {
+    closeModal("modal-standby");
+    if (standbyOwnsAudio) audio.stopSoundscape();
+    standbyOwnsAudio = false;
+    syncSoundscapeButton();
+  }
+
+  function openStrobe() {
+    openModal("modal-strobe");
+    let sec = 60;
+    let tick = 0;
+    clearInterval(strobeTimer);
+    $("strobe-countdown").textContent = "60s";
+    strobeTimer = setInterval(() => {
+      tick++;
+      const list = D.affirmations;
+      $("strobe-main-line").textContent = list[tick % list.length];
+      $("strobe-meta-tag").textContent =
+        tick % 2 === 0 ? `2029.04.18 · ${getModel().name.toUpperCase()}` : `DAY ${pad3(getDayNumber())} OF 911 · STUTTGART`;
+      if (tick % 2 === 0) {
+        sec = Math.max(0, sec - 1);
+        $("strobe-countdown").textContent = `${sec}s`;
+        audio.playTactileClick(280);
+      }
+      if (sec <= 0) closeStrobe();
+    }, 500);
+  }
+  function closeStrobe() {
+    clearInterval(strobeTimer);
+    closeModal("modal-strobe");
+  }
+
+  // --------------------------------------------------------------------------
+  // Events
+  // --------------------------------------------------------------------------
   function bindEvents() {
-    const screenTitles = {
-      s0: "IOS WIDGETKIT & STANDBY",
-      s1: "COMMISSIONING CHRONO",
-      s2: "360° COCKPIT & NIGHT DRIVE",
-      s3: "A DAY IN 2029 & PSYCHE",
-      s4: "VOICE LOOP & DRIVER'S LOG"
-    };
+    document.querySelectorAll(".tab").forEach((t) =>
+      t.addEventListener("click", () => {
+        audio.playTactileClick(740);
+        showScreen(t.dataset.target);
+      })
+    );
 
-    // 底部 5 大主畫面切換
-    document.querySelectorAll(".nav-tab-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const target = btn.getAttribute("data-target");
-        window.genesisAudio.playTactileClick(740);
+    // Ignition
+    $("btn-left-ignition").addEventListener("click", triggerIgnition);
+    $("widget-chrono-tap").addEventListener("click", triggerIgnition);
 
-        document.querySelectorAll(".nav-tab-btn").forEach((b) => {
-          b.className = "nav-tab-btn text-[#8E929B] pb-1 transition";
-        });
-        btn.className = "nav-tab-btn text-[#F4F3EF] font-bold border-b-2 border-[#D5001C] pb-1 transition";
-
-        document.querySelectorAll(".screen-pane").forEach((pane) => {
-          pane.classList.toggle("hidden", pane.id !== `screen-${target}`);
-        });
-        document.getElementById("top-screen-title").textContent = screenTitles[target] || "COMMISSIONING CHRONO";
-      });
+    // Widgets
+    $("btn-cycle-widget-tod").addEventListener("click", () => {
+      todIdx = (todIdx + 1) % TOD_VIEWS.length;
+      applyTod();
+      $("widget-daily-affirm").textContent = `「${nextAffirmation()}」`;
+      audio.playTactileClick(860);
     });
-
-    // 左側電門點火旋鈕
-    const triggerIgnition = () => {
-      const btn = document.getElementById("btn-left-ignition");
-      const shell = document.getElementById("main-app-shell");
-      btn.classList.add("turning");
-      shell.classList.add("igniting-vibration");
-      document.getElementById("ignition-label-text").textContent = "STARTING...";
-
-      window.genesisAudio.playColdStart(
-        (rpm) => {
-          document.getElementById("island-code-text").textContent = `${rpm}`;
-        },
-        () => {
-          btn.classList.remove("turning");
-          shell.classList.remove("igniting-vibration");
-          state.ignitedToday = true;
-          state.lastIgnitionDate = new Date().toISOString().slice(0, 10);
-          saveState();
-          document.getElementById("ignition-label-text").textContent = "IGNITED";
-          document.getElementById("island-code-text").textContent = "911";
-          syncAllTelemetry();
-        }
-      );
-    };
-
-    document.getElementById("btn-left-ignition").addEventListener("click", triggerIgnition);
-    document.getElementById("widget-chrono-tap").addEventListener("click", triggerIgnition);
-
-    // 桌面小工具早中晚視角切換 (防視覺麻痺)
-    document.getElementById("btn-cycle-widget-tod").addEventListener("click", () => {
-      const views = ["DAWN VIEW · 06:00", "COCKPIT VIEW · 12:00", "DUSK VIEW · 18:00"];
-      widgetTodIndex = (widgetTodIndex + 1) % views.length;
-      document.getElementById("widget-tod-label").textContent = views[widgetTodIndex];
-      affirmIdx = (affirmIdx + 1) % window.GENESIS_DATA.affirmations.length;
-      document.getElementById("widget-daily-affirm").textContent = `「${window.GENESIS_DATA.affirmations[affirmIdx]}」`;
-      window.genesisAudio.playTactileClick(860);
+    $("widget-daily-affirm").addEventListener("click", () => {
+      const t = nextAffirmation();
+      $("widget-daily-affirm").textContent = `「${t}」`;
+      audio.speak(t);
     });
-
-    document.getElementById("widget-daily-affirm").addEventListener("click", () => {
-      affirmIdx = (affirmIdx + 1) % window.GENESIS_DATA.affirmations.length;
-      const txt = window.GENESIS_DATA.affirmations[affirmIdx];
-      document.getElementById("widget-daily-affirm").textContent = `「${txt}」`;
-      window.genesisAudio.speak(txt);
-    });
-
-    document.getElementById("btn-export-wallpaper").addEventListener("click", () => {
-      window.genesisAudio.playTactileClick(940);
+    $("card-standby-launch").addEventListener("click", openStandby);
+    $("btn-open-standby").addEventListener("click", openStandby);
+    $("btn-close-standby").addEventListener("click", closeStandby);
+    $("btn-export-wallpaper").addEventListener("click", () => {
+      audio.playTactileClick(940);
       exportLockScreenWallpaper();
     });
 
-    // 購車基金入帳
-    document.getElementById("btn-deposit-fund").addEventListener("click", () => {
-      const val = Number(document.getElementById("input-fund-delta").value);
-      if (val > 0) {
-        state.allocatedFund += val;
-        saveState();
-        document.getElementById("input-fund-delta").value = "";
-        window.genesisAudio.playTactileClick(1020);
-        syncAllTelemetry();
+    // Fund
+    const deposit = () => {
+      const input = $("input-fund-delta");
+      const val = Number(input.value);
+      if (!(val > 0)) {
+        toast("請輸入大於 0 的金額");
+        return;
       }
-    });
+      state.allocatedFund += val;
+      saveState();
+      input.value = "";
+      input.blur();
+      audio.playTactileClick(1020);
+      syncAllTelemetry();
+      toast(`已入帳 NT$ ${fmtMoney(val)}`);
+    };
+    $("btn-deposit-fund").addEventListener("click", deposit);
+    $("input-fund-delta").addEventListener("keydown", (e) => e.key === "Enter" && deposit());
 
-    // 對價契約 180° 翻轉與儲存
-    const flipCard = document.getElementById("covenant-flip-card");
-    document.getElementById("btn-flip-to-back").addEventListener("click", () => {
-      document.getElementById("textarea-covenant").value = state.covenantText;
-      flipCard.classList.add("is-flipped");
-      window.genesisAudio.playTactileClick(780);
+    // Covenant
+    const flip = $("covenant-flip-card");
+    $("btn-flip-to-back").addEventListener("click", () => {
+      $("textarea-covenant").value = state.covenantText;
+      flip.classList.add("is-flipped");
+      audio.playTactileClick(780);
     });
-    document.getElementById("btn-flip-to-front").addEventListener("click", () => {
-      flipCard.classList.remove("is-flipped");
-      window.genesisAudio.playTactileClick(720);
-    });
-    document.getElementById("btn-save-covenant").addEventListener("click", () => {
-      const v = document.getElementById("textarea-covenant").value.trim();
-      if (v) {
-        state.covenantText = v;
-        saveState();
-        syncAllTelemetry();
+    $("btn-flip-to-front").addEventListener("click", () => flip.classList.remove("is-flipped"));
+    $("btn-save-covenant").addEventListener("click", () => {
+      const v = $("textarea-covenant").value.trim();
+      if (!v) {
+        toast("對價承諾不能空白");
+        return;
       }
-      flipCard.classList.remove("is-flipped");
-      window.genesisAudio.playTactileClick(980);
+      state.covenantText = v;
+      saveState();
+      syncAllTelemetry();
+      flip.classList.remove("is-flipped");
+      audio.playTactileClick(980);
+      toast("契約已封存");
     });
-    document.getElementById("btn-speak-covenant").addEventListener("click", () => {
-      window.genesisAudio.speak(state.covenantText);
-    });
+    $("btn-speak-covenant").addEventListener("click", () => audio.speak(state.covenantText));
 
-    // 911 天時光模擬滑桿
-    const simSlider = document.getElementById("slider-day-sim");
-    simSlider.addEventListener("input", () => {
-      simDayOverride = Number(simSlider.value);
+    // Timeline preview
+    const sim = $("slider-day-sim");
+    sim.addEventListener("input", () => {
+      simDayOverride = Number(sim.value);
       selectedStageIndex = null;
+      paintRange(sim);
       syncAllTelemetry();
     });
-    document.getElementById("btn-reset-day").addEventListener("click", () => {
+    $("btn-reset-day").addEventListener("click", () => {
       simDayOverride = null;
       selectedStageIndex = null;
-      simSlider.value = getDayNumber();
-      window.genesisAudio.playTactileClick(800);
+      sim.value = realDayNumber();
+      paintRange(sim);
+      audio.playTactileClick(800);
       syncAllTelemetry();
     });
 
-    // Screen 02: 夜駕與座艙模式切換
-    document.querySelectorAll(".pov-mode-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        povMode = btn.getAttribute("data-pov");
-        window.genesisAudio.playTactileClick(780);
-        document.querySelectorAll(".pov-mode-btn").forEach((b) => {
-          b.className = "pov-mode-btn bg-[#14161B] text-[#8E929B] border border-white/10 py-2 rounded text-center transition";
-        });
-        btn.className = "pov-mode-btn bg-[#F4F3EF] text-[#090A0C] font-semibold py-2 rounded text-center transition";
-      });
+    // Cockpit
+    document.querySelectorAll(".pov-mode-btn").forEach((b) =>
+      b.addEventListener("click", () => {
+        audio.playTactileClick(780);
+        applyPov(b.dataset.pov);
+      })
+    );
+    $("btn-hud-downshift").addEventListener("click", () => {
+      const p = POV_PRESETS[povMode];
+      const blipRpm = p.gear === "P" ? 4200 : Math.min(8400, p.rpm + 1700);
+      const gear = p.gear === "P" ? "P" : `M${Math.max(2, Number(p.gear.slice(1)) - 1)}`;
+      setHud(gear, p.speed, blipRpm);
+      audio.playRevMatchBlip(blipRpm);
+      clearTimeout(hudResetTimer);
+      hudResetTimer = setTimeout(() => setHud(p.gear, p.speed, p.rpm), 1100);
     });
-
-    document.getElementById("btn-hud-downshift").addEventListener("click", () => {
-      currentGear = Math.max(2, currentGear - 1);
-      currentRpm = Math.min(8400, currentRpm + 1600);
-      document.getElementById("hud-gear-speed").textContent = `M${currentGear} · ${currentSpeed} KM/H`;
-      document.getElementById("hud-rpm-readout").textContent = `${currentRpm.toLocaleString()} RPM`;
-      window.genesisAudio.playRevMatchBlip(currentRpm);
-      setTimeout(() => {
-        currentRpm = 3800;
-        currentGear = 5;
-        document.getElementById("hud-gear-speed").textContent = `M5 · 128 KM/H`;
-        document.getElementById("hud-rpm-readout").textContent = `3,800 RPM`;
-      }, 1100);
+    $("btn-speak-pcm-affirm").addEventListener("click", () => {
+      const line = nextAffirmation();
+      $("pcm-affirm-text").textContent = `「${line}」`;
+      audio.speak(line);
     });
-
-    document.getElementById("btn-speak-pcm-affirm").addEventListener("click", () => {
-      affirmIdx = (affirmIdx + 1) % window.GENESIS_DATA.affirmations.length;
-      const line = window.GENESIS_DATA.affirmations[affirmIdx];
-      document.getElementById("pcm-affirm-text").textContent = `「${line}」`;
-      window.genesisAudio.speak(line);
-    });
-
-    const soundBtn = document.getElementById("btn-toggle-soundscape");
-    soundBtn.addEventListener("click", () => {
-      if (window.genesisAudio.soundscapeActive) {
-        window.genesisAudio.stopSoundscape();
-        soundBtn.textContent = "START ENGINE AUDIO";
-        soundBtn.className = "px-2.5 py-1 rounded bg-[#D5001C] text-white font-semibold transition";
+    $("btn-toggle-soundscape").addEventListener("click", () => {
+      if (audio.soundscapeActive) {
+        stopChapter();
       } else {
-        window.genesisAudio.startSoundscape(2800, 6);
-        soundBtn.textContent = "STOP ENGINE AUDIO";
-        soundBtn.className = "px-2.5 py-1 rounded bg-[#F4F3EF] text-[#090A0C] font-semibold transition";
+        audio.startSoundscape(Math.max(1200, POV_PRESETS[povMode].rpm), 6);
+        syncSoundscapeButton();
       }
     });
-
-    const bindMixer = (id, lblId, key) => {
-      const el = document.getElementById(id);
+    [
+      ["rng-vol-boxer", "lbl-vol-boxer", "boxer"],
+      ["rng-vol-rain", "lbl-vol-rain", "rain"],
+      ["rng-vol-bin", "lbl-vol-bin", "binaural"]
+    ].forEach(([id, lbl, key]) => {
+      const el = $(id);
+      paintRange(el);
       el.addEventListener("input", () => {
         const v = Number(el.value);
-        document.getElementById(lblId).textContent = `${Math.round(v * 100)}%`;
-        window.genesisAudio.updateLevels({ [key]: v });
+        $(lbl).textContent = `${Math.round(v * 100)}%`;
+        paintRange(el);
+        audio.updateLevels({ [key]: v });
       });
-    };
-    bindMixer("rng-vol-boxer", "lbl-vol-boxer", "boxer");
-    bindMixer("rng-vol-rain", "lbl-vol-rain", "rain");
-    bindMixer("rng-vol-bin", "lbl-vol-bin", "binaural");
-
-    // Screen 03: 車主一日語音冥想播放
-    document.getElementById("btn-play-chapter").addEventListener("click", () => {
-      const ch = window.GENESIS_DATA.timelineChapters[activeChapterIdx];
-      if (chapterTimer) clearTimeout(chapterTimer);
-      window.genesisAudio.startSoundscape(2200, ch.binauralHz);
-      activeLineIdx = 0;
-
-      const stepLine = () => {
-        if (!window.genesisAudio.soundscapeActive) return;
-        if (activeLineIdx >= ch.lines.length) {
-          activeLineIdx = 0;
-          return;
-        }
-        renderChapters();
-        const txt = personalizeText(ch.lines[activeLineIdx]);
-        window.genesisAudio.speak(txt, {
-          onEnd: () => {
-            if (!window.genesisAudio.soundscapeActive) return;
-            chapterTimer = setTimeout(() => {
-              activeLineIdx++;
-              stepLine();
-            }, 1300);
-          }
-        });
-      };
-      stepLine();
     });
 
-    document.getElementById("btn-stop-chapter").addEventListener("click", () => {
-      if (chapterTimer) clearTimeout(chapterTimer);
-      window.genesisAudio.stopSoundscape();
-      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-    });
-
-    document.getElementById("btn-next-psyche").addEventListener("click", () => {
+    // 2029
+    $("btn-play-chapter").addEventListener("click", playChapter);
+    $("btn-stop-chapter").addEventListener("click", stopChapter);
+    $("btn-next-psyche").addEventListener("click", () => {
       psycheIdx++;
-      window.genesisAudio.playTactileClick(760);
+      audio.playTactileClick(760);
       renderPsycheCard();
     });
-
-    document.getElementById("btn-next-scenario").addEventListener("click", () => {
+    $("btn-next-scenario").addEventListener("click", () => {
       scenarioIdx++;
-      window.genesisAudio.playTactileClick(760);
+      audio.playTactileClick(760);
       renderScenarioCard();
     });
 
-    // Screen 04: 親口錄音與車主手札
-    document.getElementById("log-affirm-display").addEventListener("click", () => {
-      affirmIdx = (affirmIdx + 1) % window.GENESIS_DATA.affirmations.length;
-      const txt = window.GENESIS_DATA.affirmations[affirmIdx];
-      document.getElementById("log-affirm-display").textContent = `「${txt}」`;
-      window.genesisAudio.speak(txt);
+    // Log: voice loop
+    $("log-affirm-display").addEventListener("click", () => {
+      const t = nextAffirmation();
+      $("log-affirm-display").textContent = `「${t}」`;
+      audio.speak(t);
     });
-
-    const recBtn = document.getElementById("btn-rec-voice");
-    const loopBtn = document.getElementById("btn-loop-voice");
-    const recBadge = document.getElementById("rec-state-badge");
-    const audioEl = document.getElementById("self-voice-audio");
-
+    const recBtn = $("btn-rec-voice");
+    const loopBtn = $("btn-loop-voice");
+    const badge = $("rec-state-badge");
+    const audioEl = $("self-voice-audio");
     recBtn.addEventListener("click", async () => {
       if (mediaRecorder && mediaRecorder.state === "recording") {
         mediaRecorder.stop();
-        recBtn.textContent = "REC OWN VOICE";
-        recBadge.textContent = "● IMPRINT READY";
+        recBtn.textContent = "Record";
+        badge.textContent = "Saved";
         return;
       }
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        recBadge.textContent = "● MIC UNAVAILABLE";
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+        badge.textContent = "Mic unavailable";
+        toast("此環境不支援錄音");
         return;
       }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         audioChunks = [];
         mediaRecorder = new MediaRecorder(stream);
-        mediaRecorder.ondataavailable = (e) => {
-          if (e.data.size > 0) audioChunks.push(e.data);
-        };
+        mediaRecorder.ondataavailable = (e) => e.data.size > 0 && audioChunks.push(e.data);
         mediaRecorder.onstop = () => {
-          const blob = new Blob(audioChunks, { type: "audio/webm" });
-          recordedBlobUrl = URL.createObjectURL(blob);
+          if (recordedBlobUrl) URL.revokeObjectURL(recordedBlobUrl);
+          recordedBlobUrl = URL.createObjectURL(new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" }));
           audioEl.src = recordedBlobUrl;
           audioEl.loop = true;
           loopBtn.disabled = false;
           stream.getTracks().forEach((t) => t.stop());
         };
         mediaRecorder.start();
-        recBtn.textContent = "STOP REC";
-        recBadge.textContent = "● RECORDING...";
+        recBtn.textContent = "Stop";
+        badge.textContent = "Recording";
       } catch (e) {
-        recBadge.textContent = "● MIC PERMISSION NEEDED";
+        console.warn("Mic error:", e);
+        badge.textContent = "Permission needed";
+        toast("請允許麥克風權限後再試一次");
       }
     });
-
     loopBtn.addEventListener("click", () => {
       if (!recordedBlobUrl) return;
       if (audioEl.paused) {
         audioEl.play();
-        window.genesisAudio.startSoundscape(2100, 6);
-        loopBtn.textContent = "PAUSE LOOP";
+        if (!audio.soundscapeActive) audio.startSoundscape(2100, 6);
+        loopBtn.textContent = "Pause";
+        badge.textContent = "Looping";
       } else {
         audioEl.pause();
-        window.genesisAudio.stopSoundscape();
-        loopBtn.textContent = "LOOP VOICE";
+        audio.stopSoundscape();
+        loopBtn.textContent = "Loop";
+        badge.textContent = "Saved";
       }
+      syncSoundscapeButton();
+    });
+    $("btn-launch-strobe-log").addEventListener("click", openStrobe);
+    $("btn-open-strobe").addEventListener("click", openStrobe);
+    $("btn-close-strobe").addEventListener("click", closeStrobe);
+
+    // Log: signature
+    $("btn-clear-sig").addEventListener("click", () => {
+      signature.clear();
+      audio.playTactileClick(520);
+    });
+    $("btn-commit-sig").addEventListener("click", () => {
+      renderSigCounter();
+      if (state.sigCount >= 9) {
+        toast("今日 9 / 9 已完成");
+        return;
+      }
+      if (!signature.hasInk) {
+        toast("請先在金屬板上簽名");
+        return;
+      }
+      state.sigCount++;
+      saveState();
+      renderSigCounter();
+      signature.clear();
+      audio.playTactileClick(1040);
+      if (state.sigCount === 9) toast("今日 369 簽名完成");
     });
 
-    document.getElementById("btn-add-log").addEventListener("click", () => {
-      const val = document.getElementById("input-log-entry").value.trim();
-      const tag = document.getElementById("log-tag-select").value;
-      if (val) {
-        state.logs.unshift({
-          tag,
-          day: `DAY ${pad3(getDayNumber())}`,
-          text: val
-        });
-        saveState();
-        document.getElementById("input-log-entry").value = "";
-        window.genesisAudio.playTactileClick(940);
-        renderCustodianLogs();
-      }
-    });
-
-    // 全螢幕彈窗控制 (StandBy / 60s Strobe / Spec / Huberman)
-    const openStandby = () => {
-      document.getElementById("modal-standby").classList.remove("hidden");
-      document.getElementById("modal-standby").classList.add("flex");
-      window.genesisAudio.startSoundscape(1800, 6);
+    // Log: entries
+    const addLog = () => {
+      const input = $("input-log-entry");
+      const val = input.value.trim();
+      if (!val) return;
+      state.logs.unshift({ tag: $("log-tag-select").value, day: `DAY ${pad3(getDayNumber())}`, text: val });
+      saveState();
+      input.value = "";
+      audio.playTactileClick(940);
+      renderCustodianLogs();
     };
-    const closeStandby = () => {
-      document.getElementById("modal-standby").classList.add("hidden");
-      document.getElementById("modal-standby").classList.remove("flex");
-      window.genesisAudio.stopSoundscape();
-    };
-    document.getElementById("btn-open-standby").addEventListener("click", openStandby);
-    document.getElementById("card-standby-launch").addEventListener("click", openStandby);
-    document.getElementById("btn-close-standby").addEventListener("click", closeStandby);
+    $("btn-add-log").addEventListener("click", addLog);
+    $("input-log-entry").addEventListener("keydown", (e) => e.key === "Enter" && addLog());
 
-    const openStrobe = () => {
-      const modal = document.getElementById("modal-strobe");
-      modal.classList.remove("hidden");
-      modal.classList.add("flex");
-      let sec = 60;
-      let idx = 0;
-      if (strobeTimer) clearInterval(strobeTimer);
-      strobeTimer = setInterval(() => {
-        idx++;
-        const list = window.GENESIS_DATA.affirmations;
-        document.getElementById("strobe-main-line").textContent = list[idx % list.length];
-        document.getElementById("strobe-meta-tag").textContent =
-          idx % 2 === 0
-            ? `2029.04.18 // ${getModel().name.toUpperCase()}`
-            : `DAY ${pad3(getDayNumber())} OF 911 // STUTTGART`;
-        if (idx % 2 === 0) {
-          sec = Math.max(0, sec - 1);
-          document.getElementById("strobe-countdown").textContent = `${sec}s`;
-          window.genesisAudio.playTactileClick(280);
-        }
-        if (sec <= 0) closeStrobe();
-      }, 500);
-    };
-    const closeStrobe = () => {
-      if (strobeTimer) clearInterval(strobeTimer);
-      document.getElementById("modal-strobe").classList.add("hidden");
-      document.getElementById("modal-strobe").classList.remove("flex");
-    };
-    document.getElementById("btn-open-strobe").addEventListener("click", openStrobe);
-    document.getElementById("btn-launch-strobe-log").addEventListener("click", openStrobe);
-    document.getElementById("btn-close-strobe").addEventListener("click", closeStrobe);
-
-    // Spec Configurator
-    const modelSel = document.getElementById("cfg-model");
-    const paintSel = document.getElementById("cfg-paint");
-    modelSel.innerHTML = window.GENESIS_DATA.models
-      .map((m) => `<option value="${m.id}">${m.name} (${m.power})</option>`)
-      .join("");
-    paintSel.innerHTML = window.GENESIS_DATA.paints
-      .map((p) => `<option value="${p.id}">${p.name}</option>`)
-      .join("");
-
+    // Spec modal
+    const modelSel = $("cfg-model");
+    const paintSel = $("cfg-paint");
+    modelSel.innerHTML = D.models.map((m) => `<option value="${m.id}">${escapeHtml(m.name)} · ${escapeHtml(m.power)}</option>`).join("");
+    paintSel.innerHTML = D.paints.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
     modelSel.addEventListener("change", () => {
-      const m = window.GENESIS_DATA.models.find((x) => x.id === modelSel.value);
-      if (m) document.getElementById("cfg-price").value = m.defaultPrice;
+      const m = D.models.find((x) => x.id === modelSel.value);
+      if (m) $("cfg-price").value = m.defaultPrice;
     });
-
     const openSpec = () => {
       modelSel.value = state.modelId;
       paintSel.value = state.paintId;
-      document.getElementById("cfg-price").value = state.targetPrice;
-      document.getElementById("cfg-city").value = state.city;
-      document.getElementById("cfg-business").value = state.business;
-      document.getElementById("modal-spec").classList.remove("hidden");
-      document.getElementById("modal-spec").classList.add("flex");
+      $("cfg-price").value = state.targetPrice;
+      $("cfg-city").value = state.city;
+      $("cfg-business").value = state.business;
+      openModal("modal-spec");
     };
-    document.getElementById("btn-open-spec-modal").addEventListener("click", openSpec);
-    document.getElementById("btn-mobile-spec").addEventListener("click", openSpec);
-    document.getElementById("btn-close-spec").addEventListener("click", () => {
-      document.getElementById("modal-spec").classList.add("hidden");
-      document.getElementById("modal-spec").classList.remove("flex");
-    });
-    document.getElementById("btn-save-spec").addEventListener("click", () => {
+    $("btn-open-spec-modal").addEventListener("click", openSpec);
+    $("btn-mobile-spec").addEventListener("click", openSpec);
+    $("btn-close-spec").addEventListener("click", () => closeModal("modal-spec"));
+    $("btn-save-spec").addEventListener("click", () => {
       state.modelId = modelSel.value;
       state.paintId = paintSel.value;
-      state.targetPrice = Math.max(100000, Number(document.getElementById("cfg-price").value) || 7800000);
-      state.city = document.getElementById("cfg-city").value.trim() || "台北信義區";
-      state.business = document.getElementById("cfg-business").value.trim() || "高槓桿事業";
+      state.targetPrice = Math.max(100000, Number($("cfg-price").value) || 7800000);
+      state.city = $("cfg-city").value.trim() || "台北信義區";
+      state.business = $("cfg-business").value.trim() || "高槓桿事業";
       saveState();
       syncAllTelemetry();
       renderChapters();
-      document.getElementById("modal-spec").classList.add("hidden");
-      document.getElementById("modal-spec").classList.remove("flex");
-      window.genesisAudio.playRevMatchBlip(6400);
+      closeModal("modal-spec");
+      audio.playRevMatchBlip(6400);
+      toast("配置已套用");
     });
 
-    // Huberman Reality Contrast Modal
-    document.getElementById("btn-huberman-protocol").addEventListener("click", () => {
-      document.getElementById("modal-huberman").classList.remove("hidden");
-      document.getElementById("modal-huberman").classList.add("flex");
-      window.genesisAudio.playTactileClick(380);
+    // Reality check modal
+    $("btn-huberman-protocol").addEventListener("click", () => {
+      openModal("modal-huberman");
+      audio.playTactileClick(380);
     });
-    document.getElementById("btn-close-huberman").addEventListener("click", () => {
-      document.getElementById("modal-huberman").classList.add("hidden");
-      document.getElementById("modal-huberman").classList.remove("flex");
-    });
-    document.getElementById("btn-commit-huberman").addEventListener("click", () => {
-      const act = document.getElementById("input-huberman-act").value.trim();
-      if (act) {
-        state.logs.unshift({
-          tag: "HIGH-LEVERAGE",
-          day: `DAY ${pad3(getDayNumber())}`,
-          text: `[15-MIN INTERVENTION] ${act}`
-        });
-        saveState();
-        document.getElementById("input-huberman-act").value = "";
-        renderCustodianLogs();
+    $("btn-close-huberman").addEventListener("click", () => closeModal("modal-huberman"));
+    $("btn-commit-huberman").addEventListener("click", () => {
+      const input = $("input-huberman-act");
+      const act = input.value.trim();
+      if (!act) {
+        toast("先寫下一個 15 分鐘的動作");
+        return;
       }
-      document.getElementById("modal-huberman").classList.add("hidden");
-      document.getElementById("modal-huberman").classList.remove("flex");
-      window.genesisAudio.playRevMatchBlip(7200);
+      state.logs.unshift({ tag: "HIGH-LEVERAGE", day: `DAY ${pad3(getDayNumber())}`, text: `[15-MIN] ${act}` });
+      saveState();
+      input.value = "";
+      renderCustodianLogs();
+      closeModal("modal-huberman");
+      audio.playRevMatchBlip(7200);
+      toast("已記錄，現在就開始");
+    });
+
+    // Tap outside a sheet to close it
+    ["modal-spec", "modal-huberman"].forEach((id) =>
+      $(id).addEventListener("click", (e) => e.target.id === id && closeModal(id))
+    );
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        cockpit.stop();
+      } else {
+        syncAllTelemetry();
+        if (activeScreen === "s2") cockpit.start();
+      }
     });
   }
 
-  window.addEventListener("DOMContentLoaded", () => {
+  // --------------------------------------------------------------------------
+  // Boot
+  // --------------------------------------------------------------------------
+  function boot() {
+    buildSegments();
     bindEvents();
+
+    const hour = new Date().getHours();
+    todIdx = hour >= 5 && hour < 11 ? 0 : hour >= 11 && hour < 17 ? 1 : 2;
+    affirmIdx = Math.floor(Date.now() / (6 * 3600 * 1000)) % D.affirmations.length;
+    applyTod();
+    $("widget-daily-affirm").textContent = `「${D.affirmations[affirmIdx]}」`;
+
+    const sim = $("slider-day-sim");
+    sim.value = realDayNumber();
+    paintRange(sim);
+
+    applyPov("night");
     syncAllTelemetry();
-    initCockpitCanvas();
     renderChapters();
     renderPsycheCard();
     renderScenarioCard();
-    initSignaturePad();
+    renderSigCounter();
     renderCustodianLogs();
+    syncSoundscapeButton();
 
-    // 10Hz 高精度計時器更新
-    setInterval(syncAllTelemetry, 100);
-  });
+    setInterval(() => updateTicker(false), 100);
+    setInterval(syncAllTelemetry, 30000);
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
 })();

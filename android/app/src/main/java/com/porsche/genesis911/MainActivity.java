@@ -6,6 +6,8 @@ import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.media.MediaPlayer;
+import android.media.MediaRecorder;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
@@ -40,6 +42,9 @@ public class MainActivity extends Activity {
     private TextToSpeech tts;
     private boolean ttsReady = false;
     private PermissionRequest pendingMicRequest;
+    private boolean pendingNativeVoiceRecord = false;
+    private MediaRecorder voiceRecorder;
+    private MediaPlayer voicePlayer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -98,14 +103,106 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQ_RECORD_AUDIO || pendingMicRequest == null) return;
+        if (requestCode != REQ_RECORD_AUDIO) return;
         boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
-        if (granted) {
-            pendingMicRequest.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
-        } else {
-            pendingMicRequest.deny();
+        if (pendingMicRequest != null) {
+            if (granted) {
+                pendingMicRequest.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+            } else {
+                pendingMicRequest.deny();
+            }
+            pendingMicRequest = null;
         }
-        pendingMicRequest = null;
+        if (pendingNativeVoiceRecord) {
+            pendingNativeVoiceRecord = false;
+            if (granted) {
+                boolean ok = startVoiceRecordInternal();
+                notifyVoiceState(ok ? "RECORDING" : "ERROR");
+            } else {
+                notifyVoiceState("DENIED");
+            }
+        }
+    }
+
+    private File getVoiceFile() {
+        return new File(getFilesDir(), "self_voice.m4a");
+    }
+
+    private void notifyVoiceState(String status) {
+        if (webView == null) return;
+        final String js = "window.__onNativeVoiceState && window.__onNativeVoiceState(" + JSONObject.quote(status) + ")";
+        webView.post(() -> webView.evaluateJavascript(js, null));
+    }
+
+    private synchronized boolean startVoiceRecordInternal() {
+        stopVoiceLoopInternal();
+        stopVoiceRecordInternal();
+        try {
+            File out = getVoiceFile();
+            if (out.exists()) out.delete();
+            voiceRecorder = new MediaRecorder();
+            voiceRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+            voiceRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            voiceRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            voiceRecorder.setAudioEncodingBitRate(128000);
+            voiceRecorder.setAudioSamplingRate(44100);
+            voiceRecorder.setOutputFile(out.getAbsolutePath());
+            voiceRecorder.prepare();
+            voiceRecorder.start();
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "startVoiceRecordInternal failed", e);
+            stopVoiceRecordInternal();
+            return false;
+        }
+    }
+
+    private synchronized boolean stopVoiceRecordInternal() {
+        if (voiceRecorder == null) return false;
+        boolean ok = false;
+        try {
+            voiceRecorder.stop();
+            ok = true;
+        } catch (Exception e) {
+            Log.w(TAG, "stopVoiceRecordInternal warning", e);
+        } finally {
+            try { voiceRecorder.release(); } catch (Exception ignored) { }
+            voiceRecorder = null;
+        }
+        File f = getVoiceFile();
+        return ok && f.exists() && f.length() > 256;
+    }
+
+    private synchronized String toggleVoiceLoopInternal() {
+        if (voicePlayer != null) {
+            stopVoiceLoopInternal();
+            return "STOPPED";
+        }
+        File f = getVoiceFile();
+        if (!f.exists() || f.length() <= 256) return "EMPTY";
+        try {
+            voicePlayer = new MediaPlayer();
+            voicePlayer.setDataSource(f.getAbsolutePath());
+            voicePlayer.setLooping(true);
+            voicePlayer.prepare();
+            voicePlayer.start();
+            return "LOOPING";
+        } catch (Exception e) {
+            Log.e(TAG, "toggleVoiceLoopInternal failed", e);
+            stopVoiceLoopInternal();
+            return "ERROR";
+        }
+    }
+
+    private synchronized void stopVoiceLoopInternal() {
+        if (voicePlayer == null) return;
+        try {
+            if (voicePlayer.isPlaying()) voicePlayer.stop();
+        } catch (Exception ignored) { }
+        try {
+            voicePlayer.release();
+        } catch (Exception ignored) { }
+        voicePlayer = null;
     }
 
     // ---------------------------------------------------------------------
@@ -148,12 +245,41 @@ public class MainActivity extends Activity {
             float r = 0.9f;
             try { r = Float.parseFloat(rate); } catch (NumberFormatException ignored) { }
             tts.setSpeechRate(r);
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id);
+            int res = tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id);
+            if (res != TextToSpeech.SUCCESS) {
+                notifyDone(id);
+            }
         }
 
         @JavascriptInterface
         public void stopSpeaking() {
             if (tts != null) tts.stop();
+        }
+
+        @JavascriptInterface
+        public boolean hasVoiceRecord() {
+            File f = getVoiceFile();
+            return f.exists() && f.length() > 256;
+        }
+
+        @JavascriptInterface
+        public String startVoiceRecord() {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                pendingNativeVoiceRecord = true;
+                runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_RECORD_AUDIO));
+                return "PERMISSION";
+            }
+            return startVoiceRecordInternal() ? "RECORDING" : "ERROR";
+        }
+
+        @JavascriptInterface
+        public boolean stopVoiceRecord() {
+            return stopVoiceRecordInternal();
+        }
+
+        @JavascriptInterface
+        public String toggleVoiceLoop() {
+            return toggleVoiceLoopInternal();
         }
 
         @JavascriptInterface
@@ -207,6 +333,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        stopVoiceRecordInternal();
+        stopVoiceLoopInternal();
         if (tts != null) {
             tts.stop();
             tts.shutdown();

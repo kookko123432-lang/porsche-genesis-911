@@ -310,10 +310,15 @@
     igniting = true;
     const knob = $("btn-left-ignition");
     const lbl = $("ignition-label-text");
+    const wState = $("widget-ignition-state");
     const shell = $("main-app-shell");
     knob.classList.add("turning");
     lbl.classList.remove("on");
     lbl.textContent = "Cranking";
+    if (wState) {
+      wState.textContent = "CRANKING";
+      wState.className = "red strong num";
+    }
     shell.classList.add("igniting-vibration");
     setTimeout(() => shell.classList.remove("igniting-vibration"), 1300);
 
@@ -321,6 +326,7 @@
       (rpm) => {
         lbl.textContent = `${rpm} RPM`;
         $("island-code-text").textContent = rpm;
+        if (wState) wState.textContent = `${rpm} RPM`;
       },
       () => {
         knob.classList.remove("turning");
@@ -329,6 +335,7 @@
         saveState();
         $("island-code-text").textContent = "911";
         syncAllTelemetry();
+        toast("水平對臥六缸已點火 · 今日遙測啟動");
       }
     );
   }
@@ -534,7 +541,7 @@
 
       const curve = moving ? Math.sin(ts * 0.00028) * 0.06 : 0;
       const pan = -(yaw / 90) * cw * 0.55;
-      const horizon = ch * 0.43;
+      const horizon = ch * 0.38;
       const vx = cw * 0.5 + pan * 0.6 + curve * cw;
 
       ctx.clearRect(0, 0, cw, ch);
@@ -561,7 +568,7 @@
           ctx.globalAlpha = s.a;
           ctx.fillStyle = "#dfe6ff";
           ctx.beginPath();
-          ctx.arc(((s.x * cw + pan * 0.2) % cw + cw) % cw, s.y * ch, s.r, 0, Math.PI * 2);
+          ctx.arc(((s.x * cw + pan * 0.2) % cw + cw) % cw, s.y * ch * 0.9, s.r, 0, Math.PI * 2);
           ctx.fill();
         });
         ctx.globalAlpha = 1;
@@ -611,7 +618,7 @@
         ctx.strokeStyle = "rgba(255,200,150,0.18)";
         ctx.lineWidth = 1;
         for (let i = 0; i < 6; i++) {
-          const y = horizon + 4 + i * 6;
+          const y = horizon + 4 + i * 5;
           const off = Math.sin(ts * 0.001 + i) * 10;
           ctx.beginPath();
           ctx.moveTo(vx + cw * 0.12 + off, y);
@@ -621,7 +628,7 @@
       }
 
       // Road
-      const roadBottom = ch * 0.78;
+      const roadBottom = ch * 0.64;
       const halfBottom = cw * 0.62;
       ctx.fillStyle = mode === "cabin360" ? "#121417" : "#0e1015";
       ctx.beginPath();
@@ -666,8 +673,8 @@
           const z = t * t;
           [-1.25, 1.25].forEach((side) => {
             const x = lerpX(side, z);
-            const y = zToY(z) - (8 + z * 90);
-            const r = 1 + z * 9;
+            const y = zToY(z) - (8 + z * 75);
+            const r = 1 + z * 8;
             const g = ctx.createRadialGradient(x, y, 0, x, y, r * 4);
             g.addColorStop(0, "rgba(255,214,160,0.9)");
             g.addColorStop(0.25, "rgba(255,180,110,0.35)");
@@ -680,8 +687,8 @@
         ctx.fillStyle = "#d5001c";
         ctx.shadowColor = "#d5001c";
         ctx.shadowBlur = 8;
-        ctx.fillRect(vx - 12, horizon + 5, 6, 2);
-        ctx.fillRect(vx + 6, horizon + 5, 6, 2);
+        ctx.fillRect(vx - 12, horizon + 4, 6, 2);
+        ctx.fillRect(vx + 6, horizon + 4, 6, 2);
         ctx.shadowBlur = 0;
       }
 
@@ -693,8 +700,8 @@
           ctx.beginPath();
           ctx.moveTo(baseX - side * cw * 0.02, 0);
           ctx.lineTo(baseX + side * cw * 0.16, 0);
-          ctx.lineTo(baseX + side * cw * 0.02, ch * 0.66);
-          ctx.lineTo(baseX - side * cw * 0.14, ch * 0.66);
+          ctx.lineTo(baseX + side * cw * 0.02, ch * 0.58);
+          ctx.lineTo(baseX - side * cw * 0.14, ch * 0.58);
           ctx.closePath();
           ctx.fill();
         });
@@ -711,52 +718,53 @@
       const paintHex = getPaint().hex;
       const cx = cw * 0.5 + pan;
       ctx.save();
-      ctx.globalAlpha = 0.34;
+      ctx.globalAlpha = 0.36;
       ctx.fillStyle = paintHex;
       ctx.beginPath();
-      ctx.moveTo(cx - cw * 0.75, ch * 0.7);
-      ctx.quadraticCurveTo(cx - cw * 0.25, ch * 0.6, cx, ch * 0.615);
-      ctx.quadraticCurveTo(cx + cw * 0.25, ch * 0.6, cx + cw * 0.75, ch * 0.7);
-      ctx.lineTo(cx + cw * 0.75, ch);
-      ctx.lineTo(cx - cw * 0.75, ch);
+      ctx.moveTo(cx - cw * 0.72, ch * 0.58);
+      ctx.quadraticCurveTo(cx - cw * 0.25, ch * 0.49, cx, ch * 0.505);
+      ctx.quadraticCurveTo(cx + cw * 0.25, ch * 0.49, cx + cw * 0.72, ch * 0.58);
+      ctx.lineTo(cx + cw * 0.72, ch);
+      ctx.lineTo(cx - cw * 0.72, ch);
       ctx.closePath();
       ctx.fill();
       ctx.restore();
       ctx.strokeStyle = "rgba(255,255,255,0.18)";
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(cx - cw * 0.5, ch * 0.655);
-      ctx.quadraticCurveTo(cx, ch * 0.6, cx + cw * 0.5, ch * 0.655);
+      ctx.moveTo(cx - cw * 0.48, ch * 0.545);
+      ctx.quadraticCurveTo(cx, ch * 0.495, cx + cw * 0.48, ch * 0.545);
       ctx.stroke();
 
       // Dashboard
       ctx.fillStyle = "#07080a";
       ctx.beginPath();
-      ctx.moveTo(0, ch * 0.7);
-      ctx.quadraticCurveTo(cx, ch * 0.635, cw, ch * 0.7);
+      ctx.moveTo(0, ch * 0.59);
+      ctx.quadraticCurveTo(cx, ch * 0.53, cw, ch * 0.59);
       ctx.lineTo(cw, ch);
       ctx.lineTo(0, ch);
       ctx.closePath();
       ctx.fill();
 
-      const dashGlow = ctx.createRadialGradient(cx - cw * 0.1, ch * 0.86, 4, cx - cw * 0.1, ch * 0.86, cw * 0.5);
-      dashGlow.addColorStop(0, "rgba(213,0,28,0.28)");
+      const dashGlow = ctx.createRadialGradient(cx - cw * 0.12, ch * 0.72, 4, cx - cw * 0.12, ch * 0.72, cw * 0.48);
+      dashGlow.addColorStop(0, "rgba(213,0,28,0.32)");
       dashGlow.addColorStop(1, "rgba(213,0,28,0)");
       ctx.fillStyle = dashGlow;
-      ctx.fillRect(0, ch * 0.62, cw, ch * 0.38);
+      ctx.fillRect(0, ch * 0.52, cw, ch * 0.48);
 
-      ctx.strokeStyle = "rgba(213,0,28,0.85)";
-      ctx.lineWidth = 1.4;
+      // Ambient red lighting strip
+      ctx.strokeStyle = "rgba(213,0,28,0.88)";
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(0, ch * 0.735);
-      ctx.quadraticCurveTo(cx, ch * 0.68, cw, ch * 0.735);
+      ctx.moveTo(0, ch * 0.625);
+      ctx.quadraticCurveTo(cx, ch * 0.575, cw, ch * 0.625);
       ctx.stroke();
 
-      // Sport Chrono
+      // Sport Chrono dial on center dash
       const chx = cx + cw * 0.18;
-      const chy = ch * 0.655;
+      const chy = ch * 0.55;
       ctx.fillStyle = "#0b0c0f";
-      ctx.strokeStyle = "rgba(255,255,255,0.28)";
+      ctx.strokeStyle = "rgba(255,255,255,0.32)";
       ctx.lineWidth = 1.2;
       ctx.beginPath();
       ctx.arc(chx, chy, 11, 0, Math.PI * 2);
@@ -769,28 +777,74 @@
       ctx.lineTo(chx + Math.cos(ang) * 8, chy + Math.sin(ang) * 8);
       ctx.stroke();
 
-      // Steering wheel (left-hand drive)
+      // Porsche 5-ring instrument cluster behind steering wheel
       const wx = cx - cw * 0.12;
-      const wy = ch * 0.98;
-      const wr = Math.min(cw * 0.26, 96);
+      const gy = ch * 0.675;
+      [-32, -16, 16, 32].forEach((dx) => {
+        ctx.fillStyle = "#090a0d";
+        ctx.strokeStyle = "rgba(255,255,255,0.16)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(wx + dx, gy + 2, 11, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      });
+      // Central tachometer
+      ctx.fillStyle = "#0d0f14";
+      ctx.strokeStyle = "rgba(213,0,28,0.65)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(wx, gy, 16, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      const rpmRatio = Math.min(1, (POV_PRESETS[mode].rpm || 3800) / 8000);
+      const rpmAng = Math.PI * 0.75 + rpmRatio * Math.PI * 1.4;
+      ctx.strokeStyle = "#d5001c";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(wx, gy);
+      ctx.lineTo(wx + Math.cos(rpmAng) * 13, gy + Math.sin(rpmAng) * 13);
+      ctx.stroke();
+
+      // Steering wheel (left-hand drive — visible above PCM overlay)
+      const wy = ch * 0.77;
+      const wr = Math.min(cw * 0.22, 76);
       ctx.save();
       ctx.translate(wx, wy);
       ctx.rotate(curve * 2.2);
-      ctx.strokeStyle = "#1c1f25";
-      ctx.lineWidth = 11;
+      // Spokes & hub
+      ctx.strokeStyle = "#191c22";
+      ctx.lineWidth = 7;
       ctx.beginPath();
-      ctx.arc(0, 0, wr, Math.PI * 1.05, Math.PI * 1.95);
+      ctx.moveTo(-wr * 0.92, -4);
+      ctx.lineTo(wr * 0.92, -4);
+      ctx.moveTo(0, -4);
+      ctx.lineTo(0, wr * 0.9);
       ctx.stroke();
-      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.fillStyle = "#121419";
+      ctx.strokeStyle = "rgba(197,160,89,0.5)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Outer rim
+      ctx.strokeStyle = "#20242c";
+      ctx.lineWidth = 10;
+      ctx.beginPath();
+      ctx.arc(0, 0, wr, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(0, 0, wr + 5, Math.PI * 1.08, Math.PI * 1.92);
+      ctx.arc(0, 0, wr + 4.5, Math.PI * 1.06, Math.PI * 1.94);
       ctx.stroke();
+      // 12-o'clock racing yellow centering stripe
       ctx.strokeStyle = "#f5c400";
-      ctx.lineWidth = 5;
+      ctx.lineWidth = 4.5;
       ctx.beginPath();
-      ctx.moveTo(0, -wr - 5);
-      ctx.lineTo(0, -wr + 5);
+      ctx.moveTo(0, -wr - 4.5);
+      ctx.lineTo(0, -wr + 4.5);
       ctx.stroke();
       ctx.restore();
 
@@ -884,16 +938,22 @@
     if (cur) box.scrollTo({ top: Math.max(0, cur.offsetTop - 12), behavior: "smooth" });
   }
 
+  let chapterPlaying = false;
   function setPlayButton(playing) {
+    chapterPlaying = playing;
     const btn = $("btn-play-chapter");
     btn.querySelector("span").textContent = playing ? "Playing…" : "Play chapter";
-    btn.disabled = playing;
   }
 
   function playChapter() {
+    if (chapterPlaying) {
+      stopChapter();
+      return;
+    }
     const ch = D.timelineChapters[activeChapterIdx];
     const token = ++playToken;
     audio.startSoundscape(2200, ch.binauralHz);
+    syncSoundscapeButton();
     activeLineIdx = 0;
     setPlayButton(true);
     if (!audio.canSpeak()) toast("此裝置無語音合成，將以字幕方式播放");
@@ -907,16 +967,22 @@
       }
       highlightLine();
       const text = personalize(ch.lines[activeLineIdx]);
+      let advanced = false;
       const next = () => {
-        if (token !== playToken) return;
+        if (advanced || token !== playToken) return;
+        advanced = true;
         setTimeout(() => {
           if (token !== playToken) return;
           activeLineIdx++;
           step();
-        }, 1300);
+        }, 1200);
       };
-      if (audio.canSpeak()) audio.speak(text, { onEnd: next });
-      else setTimeout(next, Math.max(2500, text.length * 170));
+      if (audio.canSpeak()) {
+        audio.speak(text, { onEnd: next });
+        setTimeout(next, Math.max(7000, text.length * 360));
+      } else {
+        setTimeout(next, Math.max(2500, text.length * 170));
+      }
     };
     step();
   }
@@ -933,7 +999,7 @@
     const list = D.psycheMatrix;
     const i = psycheIdx % list.length;
     const item = list[i];
-    $("psyche-code-text").textContent = item.code;
+    $("psyche-code-text").textContent = item.code.split("（")[0].replace(/\s*\/\/\s*/, " · ");
     $("psyche-index-text").textContent = `${i + 1} / ${list.length}`;
     $("psyche-title-text").textContent = item.title;
     $("psyche-outer-text").textContent = item.outer;
@@ -1260,16 +1326,79 @@
     const loopBtn = $("btn-loop-voice");
     const badge = $("rec-state-badge");
     const audioEl = $("self-voice-audio");
+    let nativeRecActive = false;
+    let nativeLoopActive = false;
+    const hasNativeVoice = () =>
+      !!(window.AndroidBridge && typeof window.AndroidBridge.startVoiceRecord === "function");
+
+    if (hasNativeVoice() && window.AndroidBridge.hasVoiceRecord()) {
+      loopBtn.disabled = false;
+      badge.textContent = "Saved";
+    }
+
+    window.__onNativeVoiceState = (status) => {
+      if (status === "RECORDING") {
+        nativeRecActive = true;
+        recBtn.textContent = "Stop";
+        badge.textContent = "Recording";
+        toast("開始錄音，請朗讀上方肯定句");
+      } else if (status === "DENIED") {
+        nativeRecActive = false;
+        recBtn.textContent = "Record";
+        badge.textContent = "Permission needed";
+        toast("請允許麥克風權限後再試一次");
+      } else if (status === "ERROR") {
+        nativeRecActive = false;
+        recBtn.textContent = "Record";
+        badge.textContent = "Mic error";
+        toast("錄音啟動失敗，請再試一次");
+      }
+    };
+
     recBtn.addEventListener("click", async () => {
+      if (hasNativeVoice()) {
+        if (nativeRecActive) {
+          const ok = window.AndroidBridge.stopVoiceRecord();
+          nativeRecActive = false;
+          recBtn.textContent = "Record";
+          if (ok) {
+            badge.textContent = "Saved";
+            loopBtn.disabled = false;
+            toast("錄音已儲存，可點擊 Loop 循環播放");
+          } else {
+            badge.textContent = "Ready";
+            toast("錄音時間過短，請再試一次");
+          }
+          return;
+        }
+        if (nativeLoopActive) {
+          window.AndroidBridge.toggleVoiceLoop();
+          nativeLoopActive = false;
+          loopBtn.textContent = "Loop";
+          audio.stopSoundscape();
+          syncSoundscapeButton();
+        }
+        const status = window.AndroidBridge.startVoiceRecord();
+        if (status === "RECORDING") {
+          window.__onNativeVoiceState("RECORDING");
+        } else if (status === "PERMISSION") {
+          badge.textContent = "Requesting mic…";
+        } else {
+          window.__onNativeVoiceState("ERROR");
+        }
+        return;
+      }
+
       if (mediaRecorder && mediaRecorder.state === "recording") {
         mediaRecorder.stop();
         recBtn.textContent = "Record";
         badge.textContent = "Saved";
+        toast("錄音已儲存，可點擊 Loop 循環播放");
         return;
       }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
         badge.textContent = "Mic unavailable";
-        toast("此環境不支援錄音");
+        toast("此環境不支援錄音（需 HTTPS 或使用手機 App）");
         return;
       }
       try {
@@ -1295,6 +1424,22 @@
       }
     });
     loopBtn.addEventListener("click", () => {
+      if (hasNativeVoice()) {
+        const st = window.AndroidBridge.toggleVoiceLoop();
+        if (st === "LOOPING") {
+          nativeLoopActive = true;
+          if (!audio.soundscapeActive) audio.startSoundscape(2100, 6);
+          loopBtn.textContent = "Pause";
+          badge.textContent = "Looping";
+        } else {
+          nativeLoopActive = false;
+          audio.stopSoundscape();
+          loopBtn.textContent = "Loop";
+          badge.textContent = "Saved";
+        }
+        syncSoundscapeButton();
+        return;
+      }
       if (!recordedBlobUrl) return;
       if (audioEl.paused) {
         audioEl.play();
